@@ -13,9 +13,7 @@ export default function TitleBar() {
     <div className="drag-region h-11 flex items-center justify-between bg-white border-b border-gray-100 select-none">
       {/* 左侧 */}
       <div className="flex items-center gap-2.5 pl-4">
-        <div className="w-6 h-6 rounded-md flex items-center justify-center" style={{ background: '#2563eb' }}>
-          <span className="text-[11px] font-bold text-white">M</span>
-        </div>
+        <img src={new URL('../assets/icon.png', import.meta.url).href} alt="m3u8-box" className="w-6 h-6 rounded-md object-cover" />
         <span className="text-[13px] font-semibold text-gray-800 tracking-tight">m3u8-box</span>
       </div>
 

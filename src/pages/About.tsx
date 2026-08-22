@@ -15,9 +15,7 @@ export default function About() {
         transition={{ delay: 0.05 }}
         className="card p-8 text-center"
       >
-        <div className="w-16 h-16 mx-auto mb-5 rounded-2xl flex items-center justify-center" style={{ background: '#2563eb' }}>
-          <span className="text-2xl font-bold text-white">M</span>
-        </div>
+        <img src={new URL('../assets/icon.png', import.meta.url).href} alt="m3u8-box" className="w-16 h-16 mx-auto mb-5 rounded-2xl object-cover" />
 
         <h2 className="text-xl font-bold text-gray-900 mb-1">m3u8-box</h2>
         <p className="text-sm text-gray-400 mb-6">v1.0.0</p>
