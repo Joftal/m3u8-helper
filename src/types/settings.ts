@@ -1,0 +1,86 @@
+/**
+ * 应用设置 — 与 N_m3u8DL-RE CLI 参数对应
+ * 参考: CommandInvoker.cs + MyOption.cs
+ */
+export interface AppSettings {
+  // 工具路径
+  exePath: string
+  ffmpegPath: string
+  mp4decryptPath: string
+
+  // 文件管理
+  saveDir: string
+  tmpDir: string
+  savePattern: string
+  logFilePath: string
+
+  // 网络
+  baseUrl: string
+  proxy: string
+  useSystemProxy: boolean
+  headers: Record<string, string>
+
+  // 下载控制
+  threadCount: number
+  downloadRetryCount: number
+  httpRequestTimeout: number
+  maxSpeed: string
+  autoSelect: boolean
+  subOnly: boolean
+
+  // 合并控制
+  binaryMerge: boolean
+  checkSegmentsCount: boolean
+  useFFmpegConcatDemuxer: boolean
+  skipMerge: boolean
+
+  // 混流
+  muxFormat: string
+  muxMuxer: string
+  muxKeepFiles: boolean
+  muxSkipSub: boolean
+
+  // 清理
+  delAfterDone: boolean
+  noDateInfo: boolean
+
+  // 日志
+  logLevel: string
+  noLog: boolean
+
+  // 元数据
+  writeMetaJson: boolean
+  appendUrlParams: boolean
+
+  // 并发
+  concurrentDownload: boolean
+
+  // 字幕
+  subFormat: string
+  autoSubtitleFix: boolean
+
+  // 解密
+  decryptionEngine: string
+  mp4RealTimeDecryption: boolean
+  keyTextFile: string
+  customHlsMethod: string
+  customHlsKey: string
+  customHlsIv: string
+
+  // 范围
+  customRange: string
+
+  // 广告
+  adKeywords: string[]
+
+  // HLS 高级
+  allowHlsMultiExtMap: boolean
+
+  // UI（非 CLI 参数）
+  theme: 'dark' | 'light'
+  language: string
+  clipboardWatch: boolean
+
+  // 自定义参数
+  customArgs: string
+}

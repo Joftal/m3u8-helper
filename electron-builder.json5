@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json.schemastore.org/electron-builder.json",
+  "appId": "com.m3u8box.app",
+  "productName": "m3u8-box",
+  "directories": {
+    "buildResources": "resources",
+    "output": "dist"
+  },
+  "files": [
+    "out/**/*"
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      },
+      {
+        "target": "portable",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "resources/icon.png"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true
+  }
+}

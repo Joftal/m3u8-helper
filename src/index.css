@@ -1,0 +1,153 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  html {
+    font-family: 'Inter', 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    overflow: hidden;
+    background: #f9fafb;
+    color: #111827;
+  }
+
+  /* 滚动条 */
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #d1d5db;
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #9ca3af;
+  }
+
+  ::selection {
+    background: rgba(37, 99, 235, 0.15);
+    color: #111827;
+  }
+}
+
+@layer components {
+  /* 白色卡片 */
+  .card {
+    @apply bg-white rounded-xl border border-gray-100;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  }
+
+  .card-hover {
+    @apply card transition-all duration-200;
+  }
+
+  .card-hover:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    border-color: #e5e7eb;
+  }
+
+  /* 主按钮 — 纯蓝色 */
+  .btn-primary {
+    @apply px-4 py-2 rounded-lg font-medium text-white transition-all duration-150;
+    background: #2563eb;
+    box-shadow: 0 1px 2px rgba(37, 99, 235, 0.3);
+  }
+
+  .btn-primary:hover {
+    background: #1d4ed8;
+    box-shadow: 0 2px 6px rgba(37, 99, 235, 0.35);
+  }
+
+  .btn-primary:active {
+    background: #1e40af;
+    box-shadow: 0 1px 2px rgba(37, 99, 235, 0.3);
+  }
+
+  .btn-primary:disabled {
+    @apply opacity-40 cursor-not-allowed;
+    box-shadow: none;
+  }
+
+  /* 次要按钮 */
+  .btn-secondary {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-150;
+    @apply bg-white text-gray-700 border border-gray-200;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  }
+
+  .btn-secondary:hover {
+    @apply bg-gray-50 border-gray-300;
+  }
+
+  .btn-secondary:active {
+    @apply bg-gray-100;
+  }
+
+  /* 输入框 */
+  .input-field {
+    @apply w-full px-4 py-2.5 rounded-lg transition-all duration-150;
+    @apply bg-white text-gray-900 placeholder-gray-400;
+    @apply border border-gray-200;
+    @apply focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100;
+  }
+
+  /* 标签 */
+  .tag {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply bg-blue-50 text-blue-700;
+  }
+
+  .tag-success {
+    @apply bg-emerald-50 text-emerald-700;
+  }
+
+  .tag-error {
+    @apply bg-red-50 text-red-700;
+  }
+
+  .tag-warning {
+    @apply bg-amber-50 text-amber-700;
+  }
+
+  /* 区域标题 */
+  .section-title {
+    @apply text-sm font-semibold text-gray-900 tracking-tight;
+  }
+
+  /* 说明文字 */
+  .text-muted {
+    @apply text-sm text-gray-500;
+  }
+}
+
+@layer utilities {
+  /* 进度条 */
+  .progress-bar {
+    background: #2563eb;
+  }
+
+  /* 标题栏拖拽 */
+  .drag-region {
+    -webkit-app-region: drag;
+  }
+
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+}
