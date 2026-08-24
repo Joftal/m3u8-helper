@@ -4,15 +4,16 @@ export interface ElectronAPI {
     maximize: () => void
     close: () => void
     isMaximized: () => Promise<boolean>
-    onMaximizedChanged: (callback: (maximized: boolean) => void) => void
+    onMaximizedChanged: (callback: (maximized: boolean) => void) => () => void
   }
   download: {
     start: (options: any) => Promise<{ success: boolean; taskId?: string; error?: string }>
     cancel: (taskId: string) => Promise<{ success: boolean }>
-    onProgress: (callback: (data: any) => void) => void
-    onLog: (callback: (data: any) => void) => void
-    onComplete: (callback: (data: any) => void) => void
-    onStreamParsed: (callback: (data: any) => void) => void
+    waitForComplete: (taskId: string) => Promise<any>
+    onProgress: (callback: (data: any) => void) => () => void
+    onLog: (callback: (data: any) => void) => () => void
+    onComplete: (callback: (data: any) => void) => () => void
+    onStreamParsed: (callback: (data: any) => void) => () => void
     removeAllListeners: () => void
   }
   settings: {
@@ -26,11 +27,6 @@ export interface ElectronAPI {
     remove: (id: string) => Promise<{ success: boolean }>
     clear: () => Promise<{ success: boolean }>
   }
-  clipboard: {
-    start: () => void
-    stop: () => void
-    onDetected: (callback: (url: string) => void) => void
-  }
   scheduler: {
     add: (task: any) => Promise<any>
     remove: (id: string) => Promise<boolean>
@@ -42,6 +38,11 @@ export interface ElectronAPI {
   }
   app: {
     getExePath: () => Promise<string>
+    checkToolPaths: () => Promise<{
+      exe: { configured: string; detected: string; exists: boolean; missing: boolean }
+      ffmpeg: { configured: string; detected: string; exists: boolean; missing: boolean }
+      mp4decrypt: { configured: string; detected: string; exists: boolean; missing: boolean }
+    }>
     getVersion: () => Promise<string>
   }
 }

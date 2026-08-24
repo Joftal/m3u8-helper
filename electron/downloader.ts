@@ -1,4 +1,5 @@
 import { ChildProcess, spawn } from 'child_process'
+import { existsSync, mkdirSync } from 'fs'
 import { BrowserWindow } from 'electron'
 import { getStore } from './store'
 import { randomUUID } from 'crypto'
@@ -18,6 +19,54 @@ export interface DownloadTask {
 
 const activeTasks = new Map<string, DownloadTask>()
 
+function splitCustomArgs(raw: string): string[] {
+  if (!raw) return []
+
+  const tokens: string[] = []
+  let current = ''
+  let quote: '"' | "'" | null = null
+  let escaped = false
+
+  for (const char of raw) {
+    if (escaped) {
+      current += char
+      escaped = false
+      continue
+    }
+
+    if (char === '\\' && quote === '"') {
+      escaped = true
+      continue
+    }
+
+    if (char === quote) {
+      quote = null
+      continue
+    }
+
+    if ((char === '"' || char === "'") && !quote) {
+      quote = char
+      continue
+    }
+
+    if (/\s/.test(char) && !quote) {
+      if (current) {
+        tokens.push(current)
+        current = ''
+      }
+      continue
+    }
+
+    current += char
+  }
+
+  if (current) {
+    tokens.push(current)
+  }
+
+  return tokens
+}
+
 export function getActiveTasks(): Map<string, DownloadTask> {
   return activeTasks
 }
@@ -30,6 +79,23 @@ export function startDownload(options: any, mainWindow: BrowserWindow | null): s
   const exePath = settings.exePath
   if (!exePath) {
     throw new Error('未配置 N_m3u8DL-RE.exe 路径，请在设置中配置')
+  }
+  if (!existsSync(exePath)) {
+    throw new Error(`N_m3u8DL-RE.exe 路径不存在: ${exePath}`)
+  }
+
+  const ensureDir = (value?: string) => {
+    if (!value) return
+    const normalized = value.trim()
+    if (!normalized || existsSync(normalized)) return
+    mkdirSync(normalized, { recursive: true })
+  }
+
+  ensureDir(settings.saveDir)
+  ensureDir(settings.tmpDir)
+  if (settings.logFilePath) {
+    const parent = settings.logFilePath.split(/[/\\]/).slice(0, -1).join('/') || '.'
+    ensureDir(parent)
   }
 
   // 构建命令行参数
@@ -266,11 +332,14 @@ function buildArgs(options: any, settings: any): string[] {
   // ========== 混流 ==========
   // -M / --mux-after-done
   const muxFormat = options.muxFormat || settings.muxFormat
-  if (options.muxAfterDone ?? settings.muxAfterDone ?? muxFormat) {
+  const muxAfterDone = options.muxAfterDone ?? settings.muxAfterDone ?? Boolean(muxFormat)
+  if (muxAfterDone) {
     const muxer = options.muxMuxer || settings.muxMuxer || 'ffmpeg'
+    const muxSkipSub = options.muxSkipSub ?? settings.muxSkipSub
+    const muxKeepFiles = options.muxKeepFiles ?? settings.muxKeepFiles
     let muxArgs = `format=${muxFormat || 'mp4'}:muxer=${muxer}`
-    if (options.muxSkipSub) muxArgs += ':skip_sub=true'
-    if (options.muxKeepFiles) muxArgs += ':keep=true'
+    if (muxSkipSub) muxArgs += ':skip_sub=true'
+    if (muxKeepFiles) muxArgs += ':keep=true'
     args.push('-M', muxArgs)
   }
   // --mux-import
@@ -464,8 +533,7 @@ function buildArgs(options: any, settings: any): string[] {
   // ========== 自定义参数（追加到末尾） ==========
   const customArgs = options.customArgs || settings.customArgs
   if (customArgs) {
-    const extra = customArgs.split(/\s+/).filter(Boolean)
-    args.push(...extra)
+    args.push(...splitCustomArgs(customArgs))
   }
 
   return args

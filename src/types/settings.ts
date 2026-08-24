@@ -35,6 +35,7 @@ export interface AppSettings {
   skipMerge: boolean
 
   // 混流
+  muxAfterDone: boolean
   muxFormat: string
   muxMuxer: string
   muxKeepFiles: boolean
@@ -79,7 +80,6 @@ export interface AppSettings {
   // UI（非 CLI 参数）
   theme: 'dark' | 'light'
   language: string
-  clipboardWatch: boolean
 
   // 自定义参数
   customArgs: string

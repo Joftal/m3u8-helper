@@ -41,19 +41,3 @@ export function useTheme() {
   return { theme, toggleTheme, setTheme }
 }
 
-/**
- * 剪贴板监听 hook
- */
-export function useClipboardWatch() {
-  const [detectedUrl, setDetectedUrl] = useState<string | null>(null)
-
-  useEffect(() => {
-    window.api.clipboard.onDetected((url) => {
-      setDetectedUrl(url)
-    })
-  }, [])
-
-  const dismiss = useCallback(() => setDetectedUrl(null), [])
-
-  return { detectedUrl, dismiss }
-}

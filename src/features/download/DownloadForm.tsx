@@ -18,6 +18,7 @@ export default function DownloadForm() {
   const [isDownloading, setIsDownloading] = useState(false)
   const [elapsedTime, setElapsedTime] = useState(0)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
+  const elapsedTimeRef = useRef(0)
 
   const [threadCount, setThreadCount] = useState(8)
   const [autoSelect, setAutoSelect] = useState(true)
@@ -38,7 +39,18 @@ export default function DownloadForm() {
   }, [settings])
 
   useEffect(() => {
-    window.api.download.onProgress((data) => {
+    elapsedTimeRef.current = elapsedTime
+  }, [elapsedTime])
+
+  useEffect(() => {
+    const getTaskDuration = (startTime?: string) => {
+      if (!startTime) return 0
+      const start = Date.parse(startTime)
+      if (Number.isNaN(start)) return 0
+      return Math.max(0, Math.floor((Date.now() - start) / 1000))
+    }
+
+    const handleProgress = (data: any) => {
       updateTask(data.taskId, {
         progress: data.progress,
         speed: data.speed,
@@ -46,17 +58,17 @@ export default function DownloadForm() {
         totalSegments: data.totalSegments,
         status: data.status
       })
-    })
+    }
 
-    window.api.download.onLog((data) => {
+    const handleLog = (data: any) => {
       useDownloadStore.getState().addLog(data.taskId, {
         timestamp: new Date().toISOString(),
         level: data.level,
         message: data.message
       })
-    })
+    }
 
-    window.api.download.onComplete((data) => {
+    const handleComplete = (data: any) => {
       const task = useDownloadStore.getState().getTask(data.taskId)
       if (task) {
         updateTask(data.taskId, { status: data.status })
@@ -69,15 +81,23 @@ export default function DownloadForm() {
           endTime: new Date().toISOString(),
           fileSize: 0,
           outputPath: '',
-          duration: elapsedTime
+          duration: getTaskDuration(task.startTime)
         })
       }
       setIsDownloading(false)
       if (timerRef.current) clearInterval(timerRef.current)
-    })
+    }
 
-    return () => { window.api.download.removeAllListeners() }
-  }, [elapsedTime])
+    const offProgress = window.api.download.onProgress(handleProgress)
+    const offLog = window.api.download.onLog(handleLog)
+    const offComplete = window.api.download.onComplete(handleComplete)
+
+    return () => {
+      offProgress()
+      offLog()
+      offComplete()
+    }
+  }, [addRecord, updateTask])
 
   const handleUrlChange = (value: string) => {
     setUrl(value)
@@ -100,9 +120,60 @@ export default function DownloadForm() {
 
     setIsDownloading(true)
     setElapsedTime(0)
+    elapsedTimeRef.current = 0
     timerRef.current = setInterval(() => setElapsedTime((prev) => prev + 1), 1000)
 
-    const taskId = generateId()
+    const taskOptions = {
+      url: url.trim(),
+      saveName: saveName || extractFileName(url),
+      saveDir: settings.saveDir,
+      tmpDir: settings.tmpDir,
+      threadCount,
+      autoSelect,
+      muxFormat,
+      maxSpeed: maxSpeed || undefined,
+      subOnly,
+      customArgs: customArgs || undefined,
+      ffmpegPath: settings.ffmpegPath || undefined,
+      mp4decryptPath: settings.mp4decryptPath || undefined,
+      autoSubtitleFix: settings.autoSubtitleFix,
+      subFormat: settings.subFormat,
+      binaryMerge: settings.binaryMerge,
+      writeMetaJson: settings.writeMetaJson,
+      concurrentDownload: settings.concurrentDownload,
+      delAfterDone: settings.delAfterDone,
+      useSystemProxy: settings.useSystemProxy,
+      proxy: settings.proxy || undefined,
+      headers: Object.keys(settings.headers).length > 0 ? settings.headers : undefined,
+      logLevel: settings.logLevel,
+      decryptionEngine: settings.decryptionEngine,
+      downloadRetryCount: settings.downloadRetryCount,
+      httpRequestTimeout: settings.httpRequestTimeout,
+      checkSegmentsCount: settings.checkSegmentsCount,
+      baseUrl: settings.baseUrl || undefined,
+      skipMerge: settings.skipMerge || undefined,
+      customHlsMethod: settings.customHlsMethod || undefined,
+      customHlsKey: settings.customHlsKey || undefined,
+      customHlsIv: settings.customHlsIv || undefined,
+      customRange: settings.customRange || undefined,
+      adKeywords: settings.adKeywords?.length > 0 ? settings.adKeywords : undefined,
+      allowHlsMultiExtMap: settings.allowHlsMultiExtMap || undefined,
+      keyTextFile: settings.keyTextFile || undefined,
+      mp4RealTimeDecryption: settings.mp4RealTimeDecryption || undefined,
+      appendUrlParams: settings.appendUrlParams || undefined,
+      noDateInfo: settings.noDateInfo || undefined,
+      noLog: settings.noLog || undefined,
+    }
+
+    const result = await window.api.download.start(taskOptions)
+    if (!result.success) {
+      showToast('error', `启动失败: ${result.error}`)
+      setIsDownloading(false)
+      if (timerRef.current) clearInterval(timerRef.current)
+      return
+    }
+
+    const taskId = result.taskId || generateId()
     const task = {
       id: taskId,
       url: url.trim(),
@@ -114,59 +185,12 @@ export default function DownloadForm() {
       totalSegments: 0,
       startTime: new Date().toISOString(),
       logs: [],
-      options: {
-        url: url.trim(),
-        saveName: saveName || extractFileName(url),
-        saveDir: settings.saveDir,
-        tmpDir: settings.tmpDir,
-        threadCount,
-        autoSelect,
-        muxFormat,
-        maxSpeed: maxSpeed || undefined,
-        subOnly,
-        customArgs: customArgs || undefined,
-        ffmpegPath: settings.ffmpegPath || undefined,
-        mp4decryptPath: settings.mp4decryptPath || undefined,
-        autoSubtitleFix: settings.autoSubtitleFix,
-        subFormat: settings.subFormat,
-        binaryMerge: settings.binaryMerge,
-        writeMetaJson: settings.writeMetaJson,
-        concurrentDownload: settings.concurrentDownload,
-        delAfterDone: settings.delAfterDone,
-        useSystemProxy: settings.useSystemProxy,
-        proxy: settings.proxy || undefined,
-        headers: Object.keys(settings.headers).length > 0 ? settings.headers : undefined,
-        logLevel: settings.logLevel,
-        decryptionEngine: settings.decryptionEngine,
-        downloadRetryCount: settings.downloadRetryCount,
-        httpRequestTimeout: settings.httpRequestTimeout,
-        checkSegmentsCount: settings.checkSegmentsCount,
-        baseUrl: settings.baseUrl || undefined,
-        skipMerge: settings.skipMerge || undefined,
-        customHlsMethod: settings.customHlsMethod || undefined,
-        customHlsKey: settings.customHlsKey || undefined,
-        customHlsIv: settings.customHlsIv || undefined,
-        customRange: settings.customRange || undefined,
-        adKeywords: settings.adKeywords?.length > 0 ? settings.adKeywords : undefined,
-        allowHlsMultiExtMap: settings.allowHlsMultiExtMap || undefined,
-        keyTextFile: settings.keyTextFile || undefined,
-        mp4RealTimeDecryption: settings.mp4RealTimeDecryption || undefined,
-        appendUrlParams: settings.appendUrlParams || undefined,
-        noDateInfo: settings.noDateInfo || undefined,
-        noLog: settings.noLog || undefined,
-      }
+      options: taskOptions
     }
 
     addTask(task)
-    const result = await window.api.download.start(task.options)
-    if (!result.success) {
-      showToast('error', `启动失败: ${result.error}`)
-      setIsDownloading(false)
-      if (timerRef.current) clearInterval(timerRef.current)
-      updateTask(taskId, { status: 'failed' })
-    } else {
-      showToast('success', '下载任务已启动')
-    }
+    setActiveTask(taskId)
+    showToast('success', '下载任务已启动')
   }
 
   const handleCancel = async () => {
@@ -237,12 +261,10 @@ export default function DownloadForm() {
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={autoSelect} onChange={(e) => setAutoSelect(e.target.checked)}
                   className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-200" />
-                <span className="text-sm text-gray-600">自动选择最佳流</span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={subOnly} onChange={(e) => setSubOnly(e.target.checked)}
                   className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-200" />
-                <span className="text-sm text-gray-600">仅下载字幕</span>
               </label>
             </div>
             <div className="col-span-2">

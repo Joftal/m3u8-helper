@@ -4,9 +4,11 @@ import { Github, ExternalLink, Heart } from 'lucide-react'
 export default function About() {
   return (
     <div className="space-y-6">
-      <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-xl font-bold text-gray-900">关于</h1>
-        <p className="text-sm text-gray-500 mt-1">M3U8 Downloader 信息</p>
+      <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="page-header">
+        <div>
+          <div className="page-kicker">About</div>
+          <h1 className="page-title">关于应用</h1>
+        </div>
       </motion.div>
 
       <motion.div
@@ -15,17 +17,17 @@ export default function About() {
         transition={{ delay: 0.05 }}
         className="card p-8 text-center"
       >
-        <img src={new URL('../assets/icon.png', import.meta.url).href} alt="m3u8-box" className="w-16 h-16 mx-auto mb-5 rounded-2xl object-cover" />
+        <img src={new URL('../assets/icon.png', import.meta.url).href} alt="m3u8-box" className="mx-auto mb-5 h-16 w-16 rounded-2xl object-cover shadow-sm" />
 
-        <h2 className="text-xl font-bold text-gray-900 mb-1">m3u8-box</h2>
-        <p className="text-sm text-gray-400 mb-6">v1.0.0</p>
+        <h2 className="mb-1 text-2xl font-bold tracking-tight text-slate-900">m3u8-box</h2>
+        <p className="mb-6 text-sm text-slate-400">v1.0.0</p>
 
-        <p className="text-gray-500 max-w-md mx-auto mb-8 text-sm leading-relaxed">
+        <p className="mx-auto mb-8 max-w-md text-sm leading-relaxed text-slate-600">
           基于 N_m3u8DL-RE 的流媒体下载工具箱。支持 HLS/DASH/MSS 流媒体下载，
           提供简洁的图形界面。
         </p>
 
-        <div className="flex items-center justify-center gap-3 mb-8">
+        <div className="mb-8 flex items-center justify-center gap-3">
           <a
             href="https://github.com/nilaoda/N_m3u8DL-RE"
             target="_blank"
@@ -38,17 +40,17 @@ export default function About() {
           </a>
         </div>
 
-        <div className="border-t border-gray-100 pt-5">
-          <h3 className="text-xs font-semibold text-gray-500 mb-3 uppercase tracking-wider">技术栈</h3>
+        <div className="border-t border-slate-200 pt-5">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">技术栈</h3>
           <div className="flex flex-wrap justify-center gap-1.5">
             {['Electron', 'React', 'TypeScript', 'Tailwind CSS', 'Zustand', 'Vite'].map((tech) => (
-              <span key={tech} className="px-2.5 py-1 rounded-md text-xs font-medium bg-gray-50 text-gray-600 border border-gray-100">{tech}</span>
+              <span key={tech} className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">{tech}</span>
             ))}
           </div>
         </div>
 
-        <div className="border-t border-gray-100 pt-5 mt-5">
-          <p className="text-xs text-gray-400 flex items-center justify-center gap-1">
+        <div className="mt-5 border-t border-slate-200 pt-5">
+          <p className="flex items-center justify-center gap-1 text-xs text-slate-400">
             Made with <Heart size={11} className="text-red-400" /> by m3u8-box
           </p>
         </div>

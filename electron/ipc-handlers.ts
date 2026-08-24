@@ -1,9 +1,9 @@
 import { BrowserWindow, dialog, ipcMain, app } from 'electron'
+import { existsSync } from 'fs'
 import { getStore } from './store'
 import { startDownload, cancelDownload, getActiveTasks } from './downloader'
-import { startClipboardWatch, stopClipboardWatch } from './clipboard'
 import { addScheduledTask, removeScheduledTask, getScheduledTasks } from './scheduler'
-import { join } from 'path'
+import { delimiter, join } from 'path'
 
 export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
   // ========== 下载 ==========
@@ -70,18 +70,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
     return { success: true }
   })
 
-  // ========== 剪贴板 ==========
-  ipcMain.on('clipboard:start', () => {
-    startClipboardWatch(mainWindow)
-  })
-
-  ipcMain.on('clipboard:stop', () => {
-    stopClipboardWatch()
-  })
-
   // ========== 定时任务 ==========
   ipcMain.handle('scheduler:add', async (_, task) => {
-    return addScheduledTask(task)
+    return addScheduledTask(task, mainWindow)
   })
 
   ipcMain.handle('scheduler:remove', async (_, id) => {
@@ -104,11 +95,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
   ipcMain.handle('dialog:openFile', async (_, filters) => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       properties: ['openFile'],
-      filters: filters || [
-        { name: 'All Files', extensions: ['*'] },
-        { name: 'M3U8 Files', extensions: ['m3u8'] },
-        { name: 'MPD Files', extensions: ['mpd'] }
-      ]
+      filters: [{ name: 'All Files', extensions: ['*'] }]
     })
     if (result.canceled) return null
     return result.filePaths[0]
@@ -117,28 +104,57 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
   // ========== 应用信息 ==========
   ipcMain.handle('app:getExePath', async () => {
     const store = getStore()
-    let exePath = store.get('settings.exePath')
+    const configured = (store.get('settings.exePath') as string) || ''
+    if (configured && existsSync(configured)) return configured
 
-    // 自动检测
-    if (!exePath) {
-      const possiblePaths = [
-        join(process.cwd(), 'N_m3u8DL-RE.exe'),
-        join(process.cwd(), 'bin', 'N_m3u8DL-RE.exe'),
-        'H:\\m3u8down\\N_m3u8DL-RE\\src\\N_m3u8DL-RE\\bin\\Release\\net10.0\\N_m3u8DL-RE.exe',
-        'H:\\m3u8down\\N_m3u8DL-RE\\src\\N_m3u8DL-RE\\bin\\Debug\\net10.0\\N_m3u8DL-RE.exe'
-      ]
+    const possiblePaths = [
+      join(process.cwd(), 'N_m3u8DL-RE.exe'),
+      join(process.cwd(), 'bin', 'N_m3u8DL-RE.exe')
+    ]
 
-      const { existsSync } = require('fs')
-      for (const p of possiblePaths) {
-        if (existsSync(p)) {
-          exePath = p
-          store.set('settings.exePath', p)
-          break
+    for (const p of possiblePaths) {
+      if (existsSync(p)) return p
+    }
+
+    const envPath = process.env.PATH || ''
+    for (const candidate of envPath.split(delimiter)) {
+      const fullPath = join(candidate, 'N_m3u8DL-RE.exe')
+      if (existsSync(fullPath)) return fullPath
+    }
+
+    return ''
+  })
+
+  ipcMain.handle('app:checkToolPaths', async () => {
+    const store = getStore()
+
+    const check = (field: 'exePath' | 'ffmpegPath' | 'mp4decryptPath') => {
+      const configured = ((store.get(`settings.${field}`) as string) || '').trim()
+      const candidatePath = configured || ''
+
+      if (!candidatePath) {
+        return {
+          configured: '',
+          detected: '',
+          exists: false,
+          missing: true
         }
+      }
+
+      const exists = existsSync(candidatePath)
+      return {
+        configured: candidatePath,
+        detected: exists ? candidatePath : '',
+        exists,
+        missing: !exists
       }
     }
 
-    return exePath || ''
+    return {
+      exe: check('exePath'),
+      ffmpeg: check('ffmpegPath'),
+      mp4decrypt: check('mp4decryptPath')
+    }
   })
 
   ipcMain.handle('app:getVersion', async () => {

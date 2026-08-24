@@ -25,6 +25,7 @@ const defaults = {
     checkSegmentsCount: true,
     useFFmpegConcatDemuxer: false,
     skipMerge: false,
+    muxAfterDone: true,
     muxFormat: 'mp4',
     muxMuxer: 'ffmpeg',
     muxKeepFiles: false,
@@ -49,7 +50,6 @@ const defaults = {
     allowHlsMultiExtMap: false,
     theme: 'light' as 'dark' | 'light',
     language: 'zh-CN',
-    clipboardWatch: false,
     customArgs: ''
   },
   history: [] as any[],

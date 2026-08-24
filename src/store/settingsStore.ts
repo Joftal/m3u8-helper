@@ -23,6 +23,7 @@ const defaultSettings: AppSettings = {
   checkSegmentsCount: true,
   useFFmpegConcatDemuxer: false,
   skipMerge: false,
+  muxAfterDone: true,
   muxFormat: 'mp4',
   muxMuxer: 'ffmpeg',
   muxKeepFiles: false,
@@ -47,7 +48,6 @@ const defaultSettings: AppSettings = {
   allowHlsMultiExtMap: false,
   theme: 'light',
   language: 'zh-CN',
-  clipboardWatch: false,
   customArgs: ''
 }
 
@@ -72,6 +72,7 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
   updateSetting: async (key, value) => {
     set((state) => ({ settings: { ...state.settings, [key]: value } }))
     await window.api.settings.set(key, value)
+
   },
   updateSettings: (updates) => set((state) => ({ settings: { ...state.settings, ...updates } }))
 }))

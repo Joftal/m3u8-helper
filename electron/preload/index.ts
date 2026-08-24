@@ -9,7 +9,9 @@ const api = {
     close: () => ipcRenderer.send('window:close'),
     isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
     onMaximizedChanged: (callback: (maximized: boolean) => void) => {
-      ipcRenderer.on('window:maximized-changed', (_, value) => callback(value))
+      const listener = (_: unknown, value: boolean) => callback(value)
+      ipcRenderer.on('window:maximized-changed', listener)
+      return () => ipcRenderer.removeListener('window:maximized-changed', listener)
     }
   },
 
@@ -17,17 +19,34 @@ const api = {
   download: {
     start: (options: any) => ipcRenderer.invoke('download:start', options),
     cancel: (taskId: string) => ipcRenderer.invoke('download:cancel', taskId),
+    waitForComplete: (taskId: string) => new Promise((resolve) => {
+      const listener = (_: unknown, data: any) => {
+        if (data?.taskId === taskId) {
+          ipcRenderer.removeListener('download:complete', listener)
+          resolve(data)
+        }
+      }
+      ipcRenderer.on('download:complete', listener)
+    }),
     onProgress: (callback: (data: any) => void) => {
-      ipcRenderer.on('download:progress', (_, data) => callback(data))
+      const listener = (_: unknown, data: any) => callback(data)
+      ipcRenderer.on('download:progress', listener)
+      return () => ipcRenderer.removeListener('download:progress', listener)
     },
     onLog: (callback: (data: any) => void) => {
-      ipcRenderer.on('download:log', (_, data) => callback(data))
+      const listener = (_: unknown, data: any) => callback(data)
+      ipcRenderer.on('download:log', listener)
+      return () => ipcRenderer.removeListener('download:log', listener)
     },
     onComplete: (callback: (data: any) => void) => {
-      ipcRenderer.on('download:complete', (_, data) => callback(data))
+      const listener = (_: unknown, data: any) => callback(data)
+      ipcRenderer.on('download:complete', listener)
+      return () => ipcRenderer.removeListener('download:complete', listener)
     },
     onStreamParsed: (callback: (data: any) => void) => {
-      ipcRenderer.on('streams:parsed', (_, data) => callback(data))
+      const listener = (_: unknown, data: any) => callback(data)
+      ipcRenderer.on('streams:parsed', listener)
+      return () => ipcRenderer.removeListener('streams:parsed', listener)
     },
     removeAllListeners: () => {
       ipcRenderer.removeAllListeners('download:progress')
@@ -52,15 +71,6 @@ const api = {
     clear: () => ipcRenderer.invoke('history:clear')
   },
 
-  // 剪贴板
-  clipboard: {
-    start: () => ipcRenderer.send('clipboard:start'),
-    stop: () => ipcRenderer.send('clipboard:stop'),
-    onDetected: (callback: (url: string) => void) => {
-      ipcRenderer.on('clipboard:detected', (_, url) => callback(url))
-    }
-  },
-
   // 定时任务
   scheduler: {
     add: (task: any) => ipcRenderer.invoke('scheduler:add', task),
@@ -77,6 +87,7 @@ const api = {
   // 应用信息
   app: {
     getExePath: () => ipcRenderer.invoke('app:getExePath'),
+    checkToolPaths: () => ipcRenderer.invoke('app:checkToolPaths'),
     getVersion: () => ipcRenderer.invoke('app:getVersion')
   }
 }
