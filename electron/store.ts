@@ -1,16 +1,65 @@
 import { app } from 'electron'
-import { join } from 'path'
+import { join, dirname } from 'path'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+
+function resolveAppStorageRoot(): string {
+  const packagedRoot = app.isPackaged ? dirname(process.execPath) : ''
+  const candidates: string[] = []
+
+  if (packagedRoot) {
+    candidates.push(packagedRoot)
+  }
+
+  candidates.push(app.getAppPath())
+
+  if (process.cwd()) {
+    candidates.push(process.cwd())
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const testDir = join(candidate, '.m3u8-helper-test')
+      mkdirSync(testDir, { recursive: true })
+      const marker = join(testDir, 'write-test.txt')
+      writeFileSync(marker, 'ok', 'utf-8')
+      if (existsSync(marker)) {
+        try {
+          require('fs').rmSync(testDir, { recursive: true, force: true })
+        } catch {}
+
+        if (app.isPackaged && candidate === packagedRoot) {
+          return candidate
+        }
+
+        if (app.isPackaged) {
+          console.warn(`[m3u8-helper] Using packaged app directory: ${candidate}`)
+        }
+        return candidate
+      }
+    } catch {
+      continue
+    }
+  }
+
+  return packagedRoot || app.getAppPath()
+}
+
+const rootDir = resolveAppStorageRoot()
+const appDataDir = join(rootDir, '.m3u8-helper')
+const defaultDownloadDir = join(rootDir, 'downloads')
+const defaultTmpDir = join(rootDir, 'tmp')
+const defaultLogDir = join(rootDir, 'logs')
+const defaultLogFilePath = join(defaultLogDir, 'N_m3u8DL-RE.log')
 
 const defaults = {
   settings: {
     exePath: '',
     ffmpegPath: '',
     mp4decryptPath: '',
-    saveDir: '',
-    tmpDir: '',
+    saveDir: defaultDownloadDir,
+    tmpDir: defaultTmpDir,
     savePattern: '',
-    logFilePath: '',
+    logFilePath: defaultLogFilePath,
     baseUrl: '',
     proxy: '',
     useSystemProxy: true,
@@ -53,47 +102,114 @@ const defaults = {
     customArgs: ''
   },
   history: [] as any[],
-  scheduledTasks: [] as any[]
+  scheduledTasks: [] as any[],
+  runtimeTasks: [] as any[],
+  windowState: {
+    width: 1280,
+    height: 800,
+    maximized: false
+  }
 }
 
 type StoreSchema = typeof defaults
 
-let data: StoreSchema
-let configPath: string
+type CategoryName = keyof StoreSchema
 
-function getConfigPath(): string {
-  return join(app.getPath('userData'), 'm3u8-box-config.json')
+const categoryFiles: Record<CategoryName, string> = {
+  settings: 'settings.json',
+  history: 'history.json',
+  scheduledTasks: 'scheduled-tasks.json',
+  runtimeTasks: 'runtime-tasks.json',
+  windowState: 'window-state.json'
+}
+
+let data: StoreSchema
+
+function ensureAppDataDir(): void {
+  if (!existsSync(appDataDir)) {
+    mkdirSync(appDataDir, { recursive: true })
+  }
+}
+
+function getCategoryFilePath(category: CategoryName): string {
+  ensureAppDataDir()
+  return join(appDataDir, categoryFiles[category])
+}
+
+function readCategoryJson<T>(category: CategoryName, fallback: T): T {
+  const filePath = getCategoryFilePath(category)
+  try {
+    if (!existsSync(filePath)) {
+      writeFileSync(filePath, JSON.stringify(fallback, null, 2), 'utf-8')
+      return fallback
+    }
+    const raw = readFileSync(filePath, 'utf-8')
+    const parsed = JSON.parse(raw)
+    if (category === 'settings') {
+      return { ...fallback, ...parsed } as T
+    }
+    return parsed as T
+  } catch {
+    writeFileSync(filePath, JSON.stringify(fallback, null, 2), 'utf-8')
+    return fallback
+  }
+}
+
+function saveCategory(category: CategoryName): void {
+  const filePath = getCategoryFilePath(category)
+  try {
+    writeFileSync(filePath, JSON.stringify(data[category], null, 2), 'utf-8')
+  } catch (err) {
+    console.error(`Failed to save ${category}:`, err)
+  }
 }
 
 export function initStore(): void {
-  configPath = getConfigPath()
-  try {
-    if (existsSync(configPath)) {
-      const raw = readFileSync(configPath, 'utf-8')
-      const parsed = JSON.parse(raw)
-      data = {
-        ...defaults,
-        ...parsed,
-        settings: { ...defaults.settings, ...parsed.settings }
-      }
-    } else {
-      data = JSON.parse(JSON.stringify(defaults))
-      saveToFile()
-    }
-  } catch {
-    data = JSON.parse(JSON.stringify(defaults))
-    saveToFile()
+  data = {
+    settings: readCategoryJson('settings', JSON.parse(JSON.stringify(defaults.settings))),
+    history: readCategoryJson('history', JSON.parse(JSON.stringify(defaults.history))),
+    scheduledTasks: readCategoryJson('scheduledTasks', JSON.parse(JSON.stringify(defaults.scheduledTasks))),
+    runtimeTasks: readCategoryJson('runtimeTasks', JSON.parse(JSON.stringify(defaults.runtimeTasks))),
+    windowState: readCategoryJson('windowState', JSON.parse(JSON.stringify(defaults.windowState)))
+  }
+
+  if (!data.settings.saveDir || !data.settings.saveDir.trim()) {
+    data.settings.saveDir = defaultDownloadDir
+    saveCategory('settings')
+  }
+  if (!data.settings.tmpDir || !data.settings.tmpDir.trim()) {
+    data.settings.tmpDir = defaultTmpDir
+    saveCategory('settings')
+  }
+  if (!data.settings.logFilePath || !data.settings.logFilePath.trim()) {
+    data.settings.logFilePath = defaultLogFilePath
+    saveCategory('settings')
+  }
+  const logParent = dirname(data.settings.logFilePath || defaultLogFilePath)
+  if (logParent && !existsSync(logParent)) {
+    mkdirSync(logParent, { recursive: true })
   }
 }
 
-function saveToFile(): void {
-  try {
-    const dir = join(configPath, '..')
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-    writeFileSync(configPath, JSON.stringify(data, null, 2), 'utf-8')
-  } catch (err) {
-    console.error('Failed to save config:', err)
+function getNestedValue(source: any, keys: string[]): any {
+  let current = source
+  for (const key of keys) {
+    if (current == null) return undefined
+    current = current[key]
   }
+  return current
+}
+
+function setNestedValue(source: any, keys: string[], value: any): void {
+  let current = source
+  for (let i = 0; i < keys.length - 1; i++) {
+    const nextKey = keys[i]
+    if (current[nextKey] == null || typeof current[nextKey] !== 'object') {
+      current[nextKey] = {}
+    }
+    current = current[nextKey]
+  }
+  current[keys[keys.length - 1]] = value
 }
 
 export function getStore() {
@@ -101,22 +217,25 @@ export function getStore() {
     get(key?: string): any {
       if (!key) return data
       const keys = key.split('.')
-      let current: any = data
-      for (const k of keys) {
-        if (current == null) return undefined
-        current = current[k]
-      }
-      return current
+      const category = keys[0] as CategoryName
+      if (!data[category]) return undefined
+      if (keys.length === 1) return data[category]
+      return getNestedValue(data[category], keys.slice(1))
     },
     set(key: string, value: any): void {
       const keys = key.split('.')
-      let current: any = data
-      for (let i = 0; i < keys.length - 1; i++) {
-        if (current[keys[i]] == null) current[keys[i]] = {}
-        current = current[keys[i]]
+      const category = keys[0] as CategoryName
+      if (!data[category]) {
+        data[category] = {} as any
       }
-      current[keys[keys.length - 1]] = value
-      saveToFile()
+      if (keys.length === 1) {
+        data[category] = value
+        saveCategory(category)
+        return
+      }
+      const target = data[category]
+      setNestedValue(target, keys.slice(1), value)
+      saveCategory(category)
     }
   }
 }

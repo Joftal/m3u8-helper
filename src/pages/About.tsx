@@ -17,9 +17,9 @@ export default function About() {
         transition={{ delay: 0.05 }}
         className="card p-8 text-center"
       >
-        <img src={new URL('../assets/icon.png', import.meta.url).href} alt="m3u8-box" className="mx-auto mb-5 h-16 w-16 rounded-2xl object-cover shadow-sm" />
+        <img src={new URL('../assets/icon.png', import.meta.url).href} alt="m3u8-helper" className="mx-auto mb-5 h-16 w-16 rounded-2xl object-cover shadow-sm" />
 
-        <h2 className="mb-1 text-2xl font-bold tracking-tight text-slate-900">m3u8-box</h2>
+        <h2 className="mb-1 text-2xl font-bold tracking-tight text-slate-900">m3u8-helper</h2>
         <p className="mb-6 text-sm text-slate-400">v1.0.0</p>
 
         <p className="mx-auto mb-8 max-w-md text-sm leading-relaxed text-slate-600">
@@ -51,7 +51,7 @@ export default function About() {
 
         <div className="mt-5 border-t border-slate-200 pt-5">
           <p className="flex items-center justify-center gap-1 text-xs text-slate-400">
-            Made with <Heart size={11} className="text-red-400" /> by m3u8-box
+            Made with <Heart size={11} className="text-red-400" /> by m3u8-helper
           </p>
         </div>
       </motion.div>

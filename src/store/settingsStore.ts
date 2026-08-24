@@ -72,7 +72,11 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
   updateSetting: async (key, value) => {
     set((state) => ({ settings: { ...state.settings, [key]: value } }))
     await window.api.settings.set(key, value)
-
   },
-  updateSettings: (updates) => set((state) => ({ settings: { ...state.settings, ...updates } }))
+  updateSettings: async (updates) => {
+    set((state) => ({ settings: { ...state.settings, ...updates } }))
+    for (const [key, value] of Object.entries(updates)) {
+      await window.api.settings.set(key, value)
+    }
+  }
 }))

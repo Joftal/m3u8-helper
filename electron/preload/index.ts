@@ -19,6 +19,7 @@ const api = {
   download: {
     start: (options: any) => ipcRenderer.invoke('download:start', options),
     cancel: (taskId: string) => ipcRenderer.invoke('download:cancel', taskId),
+    delete: (taskId: string, taskInfo?: any) => ipcRenderer.invoke('download:delete', taskId, taskInfo),
     waitForComplete: (taskId: string) => new Promise((resolve) => {
       const listener = (_: unknown, data: any) => {
         if (data?.taskId === taskId) {
@@ -69,6 +70,13 @@ const api = {
     add: (record: any) => ipcRenderer.invoke('history:add', record),
     remove: (id: string) => ipcRenderer.invoke('history:remove', id),
     clear: () => ipcRenderer.invoke('history:clear')
+  },
+
+  // 运行任务恢复
+  runtime: {
+    getAll: () => ipcRenderer.invoke('runtime:getAll'),
+    clear: () => ipcRenderer.invoke('runtime:clear'),
+    remove: (taskId: string) => ipcRenderer.invoke('runtime:remove', taskId)
   },
 
   // 定时任务

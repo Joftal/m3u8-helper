@@ -1,9 +1,9 @@
 import { BrowserWindow, dialog, ipcMain, app } from 'electron'
 import { existsSync } from 'fs'
 import { getStore } from './store'
-import { startDownload, cancelDownload, getActiveTasks } from './downloader'
+import { startDownload, cancelDownload, getActiveTasks, deleteTaskArtifacts } from './downloader'
 import { addScheduledTask, removeScheduledTask, getScheduledTasks } from './scheduler'
-import { delimiter, join } from 'path'
+import { delimiter, dirname, join } from 'path'
 
 export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
   // ========== 下载 ==========
@@ -19,6 +19,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
   ipcMain.handle('download:cancel', async (_, taskId) => {
     const result = cancelDownload(taskId)
     return { success: result }
+  })
+
+  ipcMain.handle('download:delete', async (_, taskId, taskInfo) => {
+    try {
+      const result = deleteTaskArtifacts(taskId, taskInfo)
+      return result
+    } catch (error: any) {
+      return { success: false, deleted: [], error: error.message }
+    }
   })
 
   // ========== 设置 ==========
@@ -70,6 +79,25 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
     return { success: true }
   })
 
+  // ========== 运行任务恢复 ==========
+  ipcMain.handle('runtime:getAll', async () => {
+    const store = getStore()
+    return store.get('runtimeTasks') || []
+  })
+
+  ipcMain.handle('runtime:clear', async () => {
+    const store = getStore()
+    store.set('runtimeTasks', [])
+    return { success: true }
+  })
+
+  ipcMain.handle('runtime:remove', async (_, taskId) => {
+    const store = getStore()
+    const tasks = Array.isArray(store.get('runtimeTasks')) ? store.get('runtimeTasks') : []
+    store.set('runtimeTasks', tasks.filter((task: any) => task.id !== taskId))
+    return { success: true }
+  })
+
   // ========== 定时任务 ==========
   ipcMain.handle('scheduler:add', async (_, task) => {
     return addScheduledTask(task, mainWindow)
@@ -95,7 +123,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
   ipcMain.handle('dialog:openFile', async (_, filters) => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       properties: ['openFile'],
-      filters: [{ name: 'All Files', extensions: ['*'] }]
+      filters: Array.isArray(filters) && filters.length > 0
+        ? filters
+        : [{ name: 'All Files', extensions: ['*'] }]
     })
     if (result.canceled) return null
     return result.filePaths[0]
@@ -108,6 +138,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
     if (configured && existsSync(configured)) return configured
 
     const possiblePaths = [
+      join(dirname(process.execPath), 'N_m3u8DL-RE.exe'),
+      join(dirname(process.execPath), 'bin', 'N_m3u8DL-RE.exe'),
+      join(app.getAppPath(), 'N_m3u8DL-RE.exe'),
+      join(app.getAppPath(), 'bin', 'N_m3u8DL-RE.exe'),
       join(process.cwd(), 'N_m3u8DL-RE.exe'),
       join(process.cwd(), 'bin', 'N_m3u8DL-RE.exe')
     ]

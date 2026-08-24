@@ -27,6 +27,10 @@ export interface ElectronAPI {
     remove: (id: string) => Promise<{ success: boolean }>
     clear: () => Promise<{ success: boolean }>
   }
+  runtime: {
+    getAll: () => Promise<any[]>
+    clear: () => Promise<{ success: boolean }>
+  }
   scheduler: {
     add: (task: any) => Promise<any>
     remove: (id: string) => Promise<boolean>

@@ -1,6 +1,7 @@
 import { ChildProcess, spawn } from 'child_process'
-import { existsSync, mkdirSync } from 'fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'fs'
 import { BrowserWindow } from 'electron'
+import { basename, dirname, join } from 'path'
 import { getStore } from './store'
 import { randomUUID } from 'crypto'
 
@@ -13,6 +14,11 @@ export interface DownloadTask {
   speed: string
   downloadedSegments: number
   totalSegments: number
+  downloadedBytes: number
+  totalBytes: number
+  etaSeconds: number
+  currentFrameRate: number
+  latestLog: string
   startTime: Date
   logs: string[]
 }
@@ -71,6 +77,91 @@ export function getActiveTasks(): Map<string, DownloadTask> {
   return activeTasks
 }
 
+function formatBytesPerSecond(bytesPerSecond: number): string {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 KB/s'
+
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
+  let value = bytesPerSecond
+  let unitIndex = 0
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+
+  const precision = value >= 10 ? 1 : 2
+  return `${value.toFixed(precision)} ${units[unitIndex]}`
+}
+
+function getDirectorySize(target: string): number {
+  if (!target || !existsSync(target)) return 0
+
+  try {
+    const entries = readdirSync(target, { withFileTypes: true })
+    let total = 0
+
+    for (const entry of entries) {
+      const fullPath = join(target, entry.name)
+      if (entry.isDirectory()) {
+        total += getDirectorySize(fullPath)
+      } else if (entry.isFile()) {
+        try {
+          total += statSync(fullPath).size
+        } catch {
+          // ignore transient stat failures
+        }
+      }
+    }
+
+    return total
+  } catch {
+    return 0
+  }
+}
+
+function getTaskDiskUsage(task: DownloadTask): number {
+  const settings = getStore().get('settings') || {}
+  const candidates = [
+    (task as any).saveDir,
+    (task as any).tmpDir,
+    (task as any).options?.saveDir,
+    (task as any).options?.tmpDir,
+    settings.saveDir,
+    settings.tmpDir
+  ].filter((value): value is string => Boolean(value && value.trim()))
+
+  const uniqueDirs = Array.from(new Set(candidates.map((dir) => dir.trim())))
+  const total = uniqueDirs.reduce((sum, dir) => sum + getDirectorySize(dir), 0)
+  return total
+}
+
+function persistRuntimeTasks(): void {
+  const tasks = Array.from(activeTasks.values()).map((task) => ({
+    id: task.id,
+    url: task.url,
+    status: task.status,
+    progress: task.progress,
+    speed: task.speed,
+    downloadedSegments: task.downloadedSegments,
+    totalSegments: task.totalSegments,
+    downloadedBytes: task.downloadedBytes,
+    totalBytes: task.totalBytes,
+    etaSeconds: task.etaSeconds,
+    currentFrameRate: task.currentFrameRate,
+    latestLog: task.latestLog,
+    startTime: task.startTime instanceof Date ? task.startTime.toISOString() : task.startTime,
+    logs: task.logs.slice(-200),
+    saveName: (task as any).saveName ?? '',
+    saveDir: (task as any).saveDir ?? '',
+    options: (task as any).options ?? {}
+  }))
+  getStore().set('runtimeTasks', tasks)
+}
+
+function persistSettingsState(settings: any): void {
+  getStore().set('settings', settings)
+}
+
 export function startDownload(options: any, mainWindow: BrowserWindow | null): string {
   const store = getStore()
   const settings = store.get('settings')
@@ -91,8 +182,25 @@ export function startDownload(options: any, mainWindow: BrowserWindow | null): s
     mkdirSync(normalized, { recursive: true })
   }
 
-  ensureDir(settings.saveDir)
-  ensureDir(settings.tmpDir)
+  const executableRoot = dirname(process.execPath)
+  const defaultSaveDir = join(executableRoot, 'downloads')
+  const defaultTmpDir = join(executableRoot, 'tmp')
+  const effectiveSaveDir = options.saveDir || settings.saveDir || defaultSaveDir
+  const effectiveTmpDir = options.tmpDir || settings.tmpDir || defaultTmpDir
+
+  if (!settings.saveDir || !settings.saveDir.trim()) {
+    settings.saveDir = effectiveSaveDir
+  }
+  if (!settings.tmpDir || !settings.tmpDir.trim()) {
+    settings.tmpDir = effectiveTmpDir
+  }
+  if (!settings.logFilePath || !settings.logFilePath.trim()) {
+    settings.logFilePath = join(executableRoot, 'logs', 'N_m3u8DL-RE.log')
+  }
+  persistSettingsState(settings)
+
+  ensureDir(effectiveSaveDir)
+  ensureDir(effectiveTmpDir)
   if (settings.logFilePath) {
     const parent = settings.logFilePath.split(/[/\\]/).slice(0, -1).join('/') || '.'
     ensureDir(parent)
@@ -101,20 +209,29 @@ export function startDownload(options: any, mainWindow: BrowserWindow | null): s
   // 构建命令行参数
   const args = buildArgs(options, settings)
 
-  const task: DownloadTask = {
+  const task: DownloadTask & { saveName?: string; saveDir?: string; options?: any } = {
     id: taskId,
     url: options.url,
+    saveName: options.saveName || '',
+    saveDir: options.saveDir || settings.saveDir || effectiveSaveDir,
     process: null,
     status: 'pending',
     progress: 0,
     speed: '0 KB/s',
     downloadedSegments: 0,
     totalSegments: 0,
+    downloadedBytes: 0,
+    totalBytes: 0,
+    etaSeconds: 0,
+    currentFrameRate: 0,
+    latestLog: '',
     startTime: new Date(),
-    logs: []
+    logs: [],
+    options: options
   }
 
   activeTasks.set(taskId, task)
+  persistRuntimeTasks()
 
   // 启动子进程
   const child = spawn(exePath, args, {
@@ -124,6 +241,40 @@ export function startDownload(options: any, mainWindow: BrowserWindow | null): s
 
   task.process = child
   task.status = 'running'
+  ;(task as any)._lastSpeedBytes = getTaskDiskUsage(task)
+  ;(task as any)._lastSpeedAt = Date.now()
+
+  const speedTimer = setInterval(() => {
+    const activeTask = activeTasks.get(taskId)
+    if (!activeTask || activeTask.status !== 'running') return
+
+    const currentBytes = getTaskDiskUsage(activeTask)
+    const now = Date.now()
+    const elapsedSeconds = Math.max((now - ((activeTask as any)._lastSpeedAt ?? now)) / 1000, 1)
+    const deltaBytes = Math.max(currentBytes - ((activeTask as any)._lastSpeedBytes ?? currentBytes), 0)
+    const bytesPerSecond = deltaBytes / elapsedSeconds
+
+    activeTask.speed = formatBytesPerSecond(bytesPerSecond)
+    activeTask.downloadedBytes = Math.max(activeTask.downloadedBytes, currentBytes)
+    ;(activeTask as any)._lastSpeedBytes = currentBytes
+    ;(activeTask as any)._lastSpeedAt = now
+
+    mainWindow?.webContents.send('download:progress', {
+      taskId,
+      progress: activeTask.progress,
+      speed: activeTask.speed,
+      downloadedSegments: activeTask.downloadedSegments,
+      totalSegments: activeTask.totalSegments,
+      downloadedBytes: activeTask.downloadedBytes,
+      totalBytes: activeTask.totalBytes,
+      etaSeconds: activeTask.etaSeconds,
+      currentFrameRate: activeTask.currentFrameRate,
+      latestLog: activeTask.latestLog,
+      status: activeTask.status
+    })
+    persistRuntimeTasks()
+  }, 1000)
+  ;(task as any)._speedTimer = speedTimer
 
   // 解析 stdout
   let stdoutBuffer = ''
@@ -159,22 +310,51 @@ export function startDownload(options: any, mainWindow: BrowserWindow | null): s
     if (!task) return
 
     if (task.status === 'cancelled') {
-      // 已取消，不处理
+      task.progress = Math.min(100, Math.max(0, task.progress || 0))
+      task.latestLog = task.latestLog || '任务已取消'
     } else if (code === 0) {
       task.status = 'completed'
       task.progress = 100
+      if (task.totalSegments > 0 && task.downloadedSegments === 0) {
+        task.downloadedSegments = task.totalSegments
+      }
+      if (task.totalBytes > 0 && task.downloadedBytes === 0) {
+        task.downloadedBytes = task.totalBytes
+      }
     } else {
       task.status = 'failed'
+      const taskPayload = {
+        saveDir: (task as any).saveDir || (task as any).options?.saveDir || '',
+        saveName: (task as any).saveName || (task as any).options?.saveName || '',
+        tmpDir: (task as any).tmpDir || (task as any).options?.tmpDir || '',
+        outputPath: (task as any).outputPath || (task as any).options?.outputPath || '',
+        options: (task as any).options || {}
+      }
+      deleteTaskArtifacts(taskId, taskPayload)
     }
 
     mainWindow?.webContents.send('download:complete', {
       taskId,
       status: task.status,
-      code
+      code,
+      progress: task.progress,
+      speed: task.speed,
+      downloadedSegments: task.downloadedSegments,
+      totalSegments: task.totalSegments,
+      downloadedBytes: task.downloadedBytes,
+      totalBytes: task.totalBytes,
+      etaSeconds: task.etaSeconds,
+      currentFrameRate: task.currentFrameRate,
+      latestLog: task.latestLog
     })
 
     // 清理
+    if ((task as any)._speedTimer) {
+      clearInterval((task as any)._speedTimer)
+    }
     task.process = null
+    activeTasks.delete(taskId)
+    persistRuntimeTasks()
   })
 
   child.on('error', (err) => {
@@ -182,6 +362,7 @@ export function startDownload(options: any, mainWindow: BrowserWindow | null): s
     if (task) {
       task.status = 'failed'
       task.logs.push(`[ERROR] ${err.message}`)
+      persistRuntimeTasks()
     }
     mainWindow?.webContents.send('download:log', {
       taskId,
@@ -195,19 +376,85 @@ export function startDownload(options: any, mainWindow: BrowserWindow | null): s
 
 export function cancelDownload(taskId: string): boolean {
   const task = activeTasks.get(taskId)
-  if (!task || !task.process) return false
+  if (!task) return false
 
   task.status = 'cancelled'
-  task.process.kill('SIGTERM')
+  task.latestLog = task.latestLog || '任务已取消'
+  persistRuntimeTasks()
 
-  // Windows 上强制杀死
-  if (task.process.pid) {
-    try {
-      spawn('taskkill', ['/pid', String(task.process.pid), '/T', '/F'])
-    } catch {}
+  if (task.process) {
+    task.process.kill('SIGTERM')
+
+    // Windows 上强制杀死
+    if (task.process.pid) {
+      try {
+        spawn('taskkill', ['/pid', String(task.process.pid), '/T', '/F'])
+      } catch {}
+    }
   }
 
+  const taskPayload = {
+    saveDir: (task as any).saveDir || (task as any).options?.saveDir || '',
+    saveName: (task as any).saveName || (task as any).options?.saveName || '',
+    tmpDir: (task as any).tmpDir || (task as any).options?.tmpDir || '',
+    outputPath: (task as any).outputPath || (task as any).options?.outputPath || '',
+    options: (task as any).options || {}
+  }
+
+  deleteTaskArtifacts(taskId, taskPayload)
+
   return true
+}
+
+export function deleteTaskArtifacts(taskId: string, taskInfo: any = {}): { success: boolean; deleted: string[]; error?: string } {
+  const task = activeTasks.get(taskId)
+  const payload = task ? { ...task, ...(taskInfo || {}) } : (taskInfo || {})
+  const deleted: string[] = []
+
+  const deleteIfExists = (target?: string) => {
+    if (!target || !target.trim()) return
+    const normalized = target.trim()
+    if (!existsSync(normalized)) return
+    rmSync(normalized, { recursive: true, force: true })
+    deleted.push(normalized)
+  }
+
+  const deleteExactCandidates = (directory: string, fileNames: string[]) => {
+    if (!directory || !fileNames.length) return
+    for (const fileName of fileNames) {
+      const candidate = join(directory, fileName)
+      deleteIfExists(candidate)
+    }
+  }
+
+  const saveDir = (payload.saveDir || payload.options?.saveDir || '').trim()
+  const saveName = (payload.saveName || payload.options?.saveName || '').trim()
+  const tmpDir = (payload.tmpDir || payload.options?.tmpDir || '').trim()
+  const outputPath = (payload.outputPath || payload.options?.outputPath || '').trim()
+
+  if (outputPath) deleteIfExists(outputPath)
+  if (tmpDir) deleteIfExists(tmpDir)
+
+  if (saveDir && saveName) {
+    const baseName = basename(saveName)
+    if (baseName && baseName !== '.' && baseName !== '..') {
+      const stem = baseName.includes('.') ? baseName.slice(0, baseName.lastIndexOf('.')) : baseName
+      const suffixes = ['.part', '.tmp', '.download', '.m3u8', '.meta.json', '.json', '.ts', '.mp4', '.mkv', '.mp3', '.aac']
+      const exactCandidates = new Set<string>([baseName])
+      for (const suffix of suffixes) {
+        exactCandidates.add(`${stem}${suffix}`)
+        exactCandidates.add(`${baseName}${suffix}`)
+      }
+      deleteExactCandidates(saveDir, Array.from(exactCandidates))
+    }
+  }
+
+  if (task) {
+    activeTasks.delete(taskId)
+    persistRuntimeTasks()
+  }
+
+  return { success: true, deleted }
 }
 
 /**
@@ -539,20 +786,57 @@ function buildArgs(options: any, settings: any): string[] {
   return args
 }
 
+function parseSizeValue(raw: string): number {
+  const match = raw.match(/([\d.]+)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB|Bytes?)/i)
+  if (!match) return 0
+
+  const value = Number(match[1])
+  const unit = match[2].toUpperCase()
+  const sizes: Record<string, number> = {
+    B: 1,
+    BYTES: 1,
+    KB: 1024,
+    MB: 1024 * 1024,
+    GB: 1024 * 1024 * 1024,
+    TB: 1024 * 1024 * 1024 * 1024,
+    KIB: 1024,
+    MIB: 1024 * 1024,
+    GIB: 1024 * 1024 * 1024,
+    TIB: 1024 * 1024 * 1024 * 1024
+  }
+
+  return Math.round(value * (sizes[unit] || 1))
+}
+
+function formatSpeedFromBytesPerSecond(bytesPerSecond: number): string {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 KB/s'
+
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
+  let value = bytesPerSecond
+  let unitIndex = 0
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+
+  const precision = value >= 10 ? 1 : 2
+  return `${value.toFixed(precision)} ${units[unitIndex]}`
+}
+
 function parseOutput(taskId: string, line: string, mainWindow: BrowserWindow | null): void {
   const task = activeTasks.get(taskId)
   if (!task) return
 
-  // 去除 ANSI 转义序列
   const clean = line.replace(/\x1b\[[0-9;]*m/g, '').replace(/\r/g, '').trim()
   if (!clean) return
 
   task.logs.push(clean)
+  task.latestLog = clean
 
-  // 发送日志到渲染进程
   let level = 'INFO'
-  if (clean.includes('[ERROR]') || clean.includes('Error')) level = 'ERROR'
-  else if (clean.includes('[WARN]') || clean.includes('Warn')) level = 'WARN'
+  if (clean.includes('[ERROR]') || /\bError\b/i.test(clean)) level = 'ERROR'
+  else if (clean.includes('[WARN]') || /\bWarn\b/i.test(clean)) level = 'WARN'
   else if (clean.includes('[DEBUG]')) level = 'DEBUG'
 
   mainWindow?.webContents.send('download:log', {
@@ -561,48 +845,79 @@ function parseOutput(taskId: string, line: string, mainWindow: BrowserWindow | n
     message: clean
   })
 
-  // 解析进度信息
-  // 匹配模式: "Downloading 156/200" 或类似的分片进度
-  const segMatch = clean.match(/[Dd]ownload\w*\s+(\d+)\/(\d+)/) ||
-                   clean.match(/(\d+)\/(\d+)\s+segments/) ||
-                   clean.match(/分片\s*(\d+)\/(\d+)/)
+  const segmentSummaryMatch = clean.match(/(?:^|\||\s)(\d+)\s+segments?\b/i)
+  if (segmentSummaryMatch) {
+    task.totalSegments = Math.max(task.totalSegments, Number(segmentSummaryMatch[1]) || 0)
+  }
+
+  const segMatch = clean.match(/(?:download(?:ing)?|分片|片段|segments?)\D*(\d+)\D*(?:\/|of)\D*(\d+)/i) ||
+    clean.match(/(\d+)\s*(?:\/|of)\s*(\d+)\s*(?:segments?|分片|片段)/i) ||
+    clean.match(/(\d+)\s*\/\s*(\d+)\s*(?:\.|\s|\||$)/)
   if (segMatch) {
-    task.downloadedSegments = parseInt(segMatch[1])
-    task.totalSegments = parseInt(segMatch[2])
+    task.downloadedSegments = Math.max(0, Number(segMatch[1]) || 0)
+    task.totalSegments = Math.max(0, Number(segMatch[2]) || 0)
     if (task.totalSegments > 0) {
-      task.progress = Math.round((task.downloadedSegments / task.totalSegments) * 100)
+      task.progress = Math.min(100, Math.round((task.downloadedSegments / task.totalSegments) * 100))
     }
   }
 
-  // 匹配百分比
   const pctMatch = clean.match(/(\d+(?:\.\d+)?)\s*%/)
   if (pctMatch) {
-    task.progress = Math.min(100, parseFloat(pctMatch[1]))
+    task.progress = Math.min(100, Number(pctMatch[1]) || task.progress)
   }
 
-  // 匹配速度
-  const speedMatch = clean.match(/([\d.]+)\s*(B\/s|KB\/s|MB\/s|GB\/s|Kbps|Mbps)/i) ||
-                     clean.match(/速度[:\s]*([\d.]+)\s*(B\/s|KB\/s|MB\/s|GB\/s)/i)
+  const bytesMatch = clean.match(/(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB|Bytes?)\s*(?:\/|of|总计|共)\s*(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB|Bytes?)/i) ||
+    clean.match(/(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB|Bytes?)\s*(?:已下载|已完成|downloaded|download)/i)
+  if (bytesMatch) {
+    const current = parseSizeValue(`${bytesMatch[1]} ${bytesMatch[2]}`)
+    task.downloadedBytes = Math.max(task.downloadedBytes, current)
+    if (bytesMatch[3] && bytesMatch[4]) {
+      task.totalBytes = Math.max(0, parseSizeValue(`${bytesMatch[3]} ${bytesMatch[4]}`))
+    }
+    if (task.totalBytes > 0) {
+      task.progress = Math.min(100, Math.round((task.downloadedBytes / task.totalBytes) * 100))
+    }
+  }
+
+  const speedMatch = clean.match(/(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB)ps/i)
   if (speedMatch) {
-    task.speed = `${speedMatch[1]} ${speedMatch[2]}`
+    const bytesPerSecond = parseSizeValue(`${speedMatch[1]} ${speedMatch[2]}`)
+    task.speed = formatSpeedFromBytesPerSecond(bytesPerSecond)
   }
 
-  // 匹配 Done/Failed
-  if (clean.includes('Done') || clean.includes('完成')) {
-    task.status = 'completed'
-    task.progress = 100
-  }
-  if (clean.includes('Failed') || clean.includes('失败')) {
-    task.status = 'failed'
+  const etaMatch = clean.match(/(?:ETA|剩余时间|预计剩余|剩余)\s*[:=]?\s*(\d{1,2}:\d{2}:\d{2}|\d{1,2}:\d{2})/i)
+  if (etaMatch) {
+    const raw = etaMatch[1]
+    const parts = raw.split(':').map(Number)
+    if (parts.length === 3) task.etaSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
+    else if (parts.length === 2) task.etaSeconds = parts[0] * 60 + parts[1]
   }
 
-  // 发送进度更新
+  const fpsMatch = clean.match(/([\d.]+)\s*fps/i)
+  if (fpsMatch) {
+    task.currentFrameRate = Number(fpsMatch[1]) || task.currentFrameRate
+  }
+
+  if (task.progress >= 100 && task.totalSegments > 0 && task.downloadedSegments === 0) {
+    task.downloadedSegments = task.totalSegments
+  }
+  if (task.progress >= 100 && task.totalBytes > 0 && task.downloadedBytes === 0) {
+    task.downloadedBytes = task.totalBytes
+  }
+
   mainWindow?.webContents.send('download:progress', {
     taskId,
     progress: task.progress,
     speed: task.speed,
     downloadedSegments: task.downloadedSegments,
     totalSegments: task.totalSegments,
+    downloadedBytes: task.downloadedBytes,
+    totalBytes: task.totalBytes,
+    etaSeconds: task.etaSeconds,
+    currentFrameRate: task.currentFrameRate,
+    latestLog: task.latestLog,
     status: task.status
   })
+
+  persistRuntimeTasks()
 }

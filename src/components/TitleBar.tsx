@@ -3,6 +3,7 @@ import { Copy, Minus, Square, X } from 'lucide-react'
 
 export default function TitleBar() {
   const [isMaximized, setIsMaximized] = useState(false)
+  const appIcon = new URL('../assets/icon.png', import.meta.url).href
 
   useEffect(() => {
     window.api.window.isMaximized().then(setIsMaximized)
@@ -12,8 +13,8 @@ export default function TitleBar() {
   return (
     <div className="drag-region h-12 flex items-center justify-between bg-white/90 border-b border-slate-200 select-none backdrop-blur-sm">
       <div className="flex items-center gap-2.5 pl-4">
-        <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-sky-400 via-blue-500 to-emerald-400 shadow-inner shadow-white/30" />
-        <span className="text-[13px] font-semibold text-slate-800 tracking-tight">m3u8-box</span>
+        <img src={appIcon} alt="m3u8-helper" className="h-6 w-6 rounded-lg object-cover shadow-sm ring-1 ring-slate-200" />
+        <span className="text-[13px] font-semibold text-slate-800 tracking-tight">m3u8-helper</span>
       </div>
 
       <div className="flex h-full no-drag items-center gap-1.5 pr-2">

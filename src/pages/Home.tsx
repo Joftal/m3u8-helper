@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { motion } from 'framer-motion'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
+import * as XLSX from 'xlsx'
 import {
   Activity,
   CheckCircle2,
@@ -16,6 +16,7 @@ import {
   Sparkles,
   Square,
   Trash2,
+  Upload,
 } from 'lucide-react'
 import { useDownloadStore } from '@/store/downloadStore'
 import { useHistoryStore } from '@/store/historyStore'
@@ -31,6 +32,7 @@ interface BatchItem {
   saveName: string
   status: 'pending' | 'running' | 'completed' | 'failed'
   progress: number
+  taskId?: string
 }
 
 function isRecordTask(task: DownloadTask): boolean {
@@ -51,6 +53,37 @@ function getTaskRuntimeSeconds(startTime?: string): number {
   const start = Date.parse(startTime)
   if (Number.isNaN(start)) return 0
   return Math.max(0, Math.floor((Date.now() - start) / 1000))
+}
+
+function formatNetworkSpeed(bytesPerSecond: number): string {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 KB/s'
+
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
+  let value = bytesPerSecond
+  let unitIndex = 0
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+
+  const precision = value >= 10 ? 1 : 2
+  return `${value.toFixed(precision)} ${units[unitIndex]}`
+}
+
+function parseSpeedToBytesPerSecond(raw: string): number {
+  const match = raw.match(/([\d.]+)\s*(B\/s|KB\/s|MB\/s|GB\/s|Bps|KBps|MBps|GBps)/i)
+  if (!match) return 0
+
+  const value = Number(match[1]) || 0
+  const unit = match[2].toLowerCase().replace(/ps$/, '/s')
+  const base: Record<string, number> = {
+    'b/s': 1,
+    'kb/s': 1024,
+    'mb/s': 1024 * 1024,
+    'gb/s': 1024 * 1024 * 1024
+  }
+  return value * (base[unit] ?? 1)
 }
 
 const statusMap = {
@@ -96,10 +129,12 @@ export default function Home() {
   const [batchText, setBatchText] = useState('')
   const [batchItems, setBatchItems] = useState<BatchItem[]>([])
   const [isBatchRunning, setIsBatchRunning] = useState(false)
+  const [deleteConfirmTask, setDeleteConfirmTask] = useState<DownloadTask | null>(null)
+  const batchFileInputRef = useRef<HTMLInputElement | null>(null)
 
-  const { tasks, activeTaskId, addTask, updateTask, setActiveTask } = useDownloadStore()
+  const { tasks, activeTaskId, addTask, updateTask, setActiveTask, removeTask } = useDownloadStore()
   const { settings } = useSettingsStore()
-  const { records, addRecord } = useHistoryStore()
+  const { addRecord, removeRecord } = useHistoryStore()
 
   useEffect(() => {
     setDownloadThreadCount(settings.threadCount)
@@ -114,8 +149,22 @@ export default function Home() {
         speed: data.speed,
         downloadedSegments: data.downloadedSegments,
         totalSegments: data.totalSegments,
+        downloadedBytes: data.downloadedBytes,
+        totalBytes: data.totalBytes,
+        etaSeconds: data.etaSeconds,
+        currentFrameRate: data.currentFrameRate,
+        latestLog: data.latestLog,
         status: data.status
       })
+      setBatchItems((prev) => prev.map((entry) => {
+        if (entry.taskId !== data.taskId) return entry
+        const nextStatus = data.status === 'completed' ? 'completed' : data.status === 'failed' || data.status === 'cancelled' ? 'failed' : 'running'
+        return {
+          ...entry,
+          status: nextStatus,
+          progress: typeof data.progress === 'number' ? Number(data.progress) : entry.progress
+        }
+      }))
       if (data.taskId === recordTaskId) {
         setRecordSize((prev) => Math.max(prev, Number(data.downloadedBytes || prev || 0)))
       }
@@ -132,19 +181,40 @@ export default function Home() {
     const handleComplete = (data: any) => {
       const task = useDownloadStore.getState().getTask(data.taskId)
       if (task) {
-        updateTask(data.taskId, { status: data.status })
+        updateTask(data.taskId, {
+          status: data.status,
+          progress: typeof data.progress === 'number' ? data.progress : 100,
+          speed: data.speed || task.speed || '0 KB/s',
+          downloadedSegments: typeof data.downloadedSegments === 'number' ? data.downloadedSegments : task.downloadedSegments,
+          totalSegments: typeof data.totalSegments === 'number' ? data.totalSegments : task.totalSegments,
+          downloadedBytes: typeof data.downloadedBytes === 'number' ? data.downloadedBytes : task.downloadedBytes,
+          totalBytes: typeof data.totalBytes === 'number' ? data.totalBytes : task.totalBytes,
+          etaSeconds: typeof data.etaSeconds === 'number' ? data.etaSeconds : task.etaSeconds,
+          currentFrameRate: typeof data.currentFrameRate === 'number' ? data.currentFrameRate : task.currentFrameRate,
+          latestLog: data.latestLog || task.latestLog || '任务已完成'
+        })
         addRecord({
           id: data.taskId,
           url: task.url,
           saveName: task.saveName,
-          status: data.status === 'completed' ? 'completed' : 'failed',
+          status: data.status === 'completed' ? 'completed' : data.status === 'cancelled' ? 'cancelled' : 'failed',
           startTime: task.startTime,
           endTime: new Date().toISOString(),
-          fileSize: 0,
-          outputPath: '',
+          fileSize: Number(task.totalBytes || task.downloadedBytes || 0),
+          outputPath: task.saveDir || task.options?.saveDir || settings.saveDir || '',
           duration: getTaskRuntimeSeconds(task.startTime)
         })
       }
+
+      setBatchItems((prev) => prev.map((entry) => {
+        if (entry.taskId !== data.taskId) return entry
+        const nextStatus = data.status === 'completed' ? 'completed' : data.status === 'failed' || data.status === 'cancelled' ? 'failed' : 'running'
+        return {
+          ...entry,
+          status: nextStatus,
+          progress: typeof data.progress === 'number' ? Number(data.progress) : entry.progress
+        }
+      }))
 
       if (data.taskId === recordTaskId) {
         setIsRecording(false)
@@ -152,8 +222,14 @@ export default function Home() {
         if (recordTimerRef.current) clearInterval(recordTimerRef.current)
       }
 
-      setIsDownloading(false)
-      if (downloadTimerRef.current) clearInterval(downloadTimerRef.current)
+      const hasActiveDownload = useDownloadStore.getState().tasks.some((candidate) => {
+        if (isRecordTask(candidate)) return false
+        return candidate.status === 'pending' || candidate.status === 'running'
+      })
+      if (!hasActiveDownload) {
+        setIsDownloading(false)
+        if (downloadTimerRef.current) clearInterval(downloadTimerRef.current)
+      }
     }
 
     const offProgress = window.api.download.onProgress(handleProgress)
@@ -165,34 +241,49 @@ export default function Home() {
       offLog()
       offComplete()
     }
-  }, [addRecord, recordTaskId, updateTask])
+  }, [addRecord, recordTaskId, tasks, updateTask])
 
   const downloadTasks = tasks.filter((task) => !isRecordTask(task))
   const recordTasks = tasks.filter((task) => isRecordTask(task))
   const activeDownloadTask = downloadTasks.find((task) => task.id === activeTaskId) ?? downloadTasks[0] ?? null
   const activeRecordTask = recordTasks.find((task) => task.id === activeTaskId) ?? recordTasks[0] ?? null
   const currentTask = activeTab === 'download' ? activeDownloadTask : activeRecordTask
-  const totalTaskCount = tasks.length
-  const runningTaskCount = tasks.filter((task) => task.status === 'running' || task.status === 'pending').length
-  const completedTaskCount = tasks.filter((task) => task.status === 'completed').length
-  const lastHistoryRecord = records[0]
 
   const getTaskMeta = (task: DownloadTask) => {
     const progress = Math.min(100, Math.max(0, Number(task.progress) || 0))
+    const downloadedBytes = Number(task.downloadedBytes ?? 0)
+    const totalBytes = Number(task.totalBytes ?? 0)
+    const sizeSummary = totalBytes > 0
+      ? `${formatFileSize(downloadedBytes)} / ${formatFileSize(totalBytes)}`
+      : task.totalSegments > 0
+        ? `${task.downloadedSegments || 0} / ${task.totalSegments}`
+        : '0 / 0'
+
     if (isRecordTask(task)) {
       return {
         tag: '录制任务',
         status: statusMap[task.status].label,
         progressText: `${progress}%`,
-        secondary: `${task.downloadedSegments || 0} / ${task.totalSegments || 0} 片段`
+        sizeSummary,
+        speed: task.speed || '0 KB/s'
       }
     }
     return {
       tag: '下载任务',
       status: statusMap[task.status].label,
       progressText: `${progress}%`,
-      secondary: `${task.downloadedSegments || 0} / ${task.totalSegments || 0} 分片`
+      sizeSummary,
+      speed: task.speed || '0 KB/s'
     }
+  }
+
+  const getTaskActionMessage = (
+    action: '取消' | '重试' | '删除',
+    outcome: 'success' | 'error' | 'info',
+    detail: string
+  ) => {
+    const label = outcome === 'error' ? '失败' : '成功'
+    return `${action}${label}：${detail}`
   }
 
   const handleDownloadUrlChange = (value: string) => {
@@ -399,6 +490,187 @@ export default function Home() {
     showToast('success', `已解析 ${next.length} 个链接`)
   }
 
+  const appendImportedBatchItems = (rows: Array<{ name: string; url: string }>) => {
+    const parsedRows: BatchItem[] = []
+
+    rows.forEach(({ name, url }) => {
+      const trimmedUrl = url.trim()
+      const trimmedName = name.trim()
+      if (!trimmedUrl || !isValidUrl(trimmedUrl)) return
+      parsedRows.push({
+        id: generateId(),
+        url: trimmedUrl,
+        saveName: trimmedName || extractFileName(trimmedUrl),
+        status: 'pending',
+        progress: 0
+      })
+    })
+
+    if (parsedRows.length === 0) {
+      showToast('error', '未找到可导入的下载链接，模板必须是 A 列名称 / B 列链接')
+      return
+    }
+
+    setBatchItems((prev) => [...prev, ...parsedRows])
+    showToast('success', `已导入 ${parsedRows.length} 个任务`)
+  }
+
+  const normalizeImportCell = (value: string) => value
+    .replace(/^[\uFEFF\s"'“”‘’]+|[\uFEFF\s"'“”‘’]+$/g, '')
+    .replace(/[\r\n]+/g, ' ')
+    .trim()
+
+  const parseDelimitedRow = (line: string): string[] => {
+    const result: string[] = []
+    let current = ''
+    let inQuotes = false
+
+    for (let i = 0; i < line.length; i += 1) {
+      const char = line[i]
+      const next = line[i + 1]
+
+      if ((char === '"' || char === "'" || char === '“' || char === '”' || char === '‘' || char === '’') && (i === 0 || line[i - 1] !== '\\')) {
+        if (inQuotes) {
+          if (next === '"' || next === "'" || next === '“' || next === '”' || next === '‘' || next === '’') {
+            current += char
+            i += 1
+          } else {
+            inQuotes = false
+          }
+        } else {
+          inQuotes = true
+        }
+        continue
+      }
+
+      if (!inQuotes && (char === ',' || char === '\t' || char === '|' || char === ';')) {
+        result.push(normalizeImportCell(current))
+        current = ''
+        continue
+      }
+
+      if (!inQuotes && /\s{2,}/.test(char) && !/[\dA-Za-z]/.test(next ?? '')) {
+        if (current.trim()) {
+          result.push(normalizeImportCell(current))
+          current = ''
+        }
+        continue
+      }
+
+      current += char
+    }
+
+    result.push(normalizeImportCell(current))
+    return result.filter((cell) => cell.length > 0)
+  }
+
+  const extractUrlCandidate = (value: string) => {
+    const trimmed = normalizeImportCell(value)
+    const match = trimmed.match(/https?:\/\/[^\s,;|)\]]+/i)
+    if (!match) return null
+    return match[0].replace(/[),.;]+$/, '')
+  }
+
+  const parseFixedColumnImport = (rawText: string) => {
+    const rows: Array<{ name: string; url: string }> = []
+    const lines = rawText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+
+    const parseLine = (line: string) => {
+      const trimmed = normalizeImportCell(line)
+      if (!trimmed) return null
+
+      if (isValidUrl(trimmed)) {
+        return { name: extractFileName(trimmed), url: trimmed }
+      }
+
+      const urlRegex = /https?:\/\/[^\s,;|)\]]+/i
+      const urlMatch = trimmed.match(urlRegex)
+      if (urlMatch) {
+        const url = normalizeImportCell(urlMatch[0].replace(/[),.;]+$/, ''))
+        const urlIndex = trimmed.indexOf(url)
+        const before = normalizeImportCell(trimmed.slice(0, urlIndex))
+        const after = normalizeImportCell(trimmed.slice(urlIndex + url.length))
+        const name = before || after
+        if (name && isValidUrl(url)) {
+          return {
+            name: normalizeImportCell(name.replace(/^[\s\-：:|,;]+|[\s\-：:|,;]+$/g, '')),
+            url
+          }
+        }
+      }
+
+      const cells = parseDelimitedRow(trimmed)
+      if (cells.length >= 2) {
+        const urlIndex = cells.findIndex((cell) => isValidUrl(normalizeImportCell(cell)))
+        if (urlIndex >= 0) {
+          const url = normalizeImportCell(cells[urlIndex])
+          const name = cells.filter((_, index) => index !== urlIndex).join(' ').trim()
+          if (name) {
+            return { name: normalizeImportCell(name), url }
+          }
+          return { name: extractFileName(url), url }
+        }
+      }
+
+      return null
+    }
+
+    for (const line of lines) {
+      const parsed = parseLine(line)
+      if (!parsed) continue
+      const name = normalizeImportCell(parsed.name)
+      const url = normalizeImportCell(parsed.url)
+      if (!url || !isValidUrl(url)) continue
+      if (name.toLowerCase() === '名称' || name.toLowerCase() === '名字' || name.toLowerCase() === 'name' || name.toLowerCase() === 'url' || name.toLowerCase() === '链接' || name.toLowerCase() === '地址') {
+        continue
+      }
+      rows.push({ name: name || extractFileName(url), url })
+    }
+
+    return rows
+  }
+
+  const handleBatchImport = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      const fileName = file.name.toLowerCase()
+
+      if (/\.(txt|csv|tsv)$/i.test(fileName)) {
+        const text = await file.text()
+        const parsedRows = parseFixedColumnImport(text)
+        appendImportedBatchItems(parsedRows)
+      } else if (/\.(xlsx|xls)$/i.test(fileName)) {
+        const arrayBuffer = await file.arrayBuffer()
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' })
+        const sheet = workbook.Sheets[workbook.SheetNames[0]]
+        const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' })
+        const parsedRows: Array<{ name: string; url: string }> = []
+
+        rows.forEach((row) => {
+          if (!Array.isArray(row) || row.length < 2) return
+          const firstCell = normalizeImportCell(String(row[0] ?? ''))
+          const secondCell = normalizeImportCell(String(row[1] ?? ''))
+          const headerLike = ['名称', '名字', '文件名', 'name', 'title', '链接', 'url', '地址', 'http', 'https']
+          if (!firstCell || !secondCell) return
+          if (headerLike.includes(firstCell) || headerLike.includes(secondCell)) return
+          const urlCell = secondCell.includes('http') ? secondCell : extractUrlCandidate(secondCell)
+          if (!urlCell || !isValidUrl(urlCell)) return
+          parsedRows.push({ name: firstCell, url: urlCell })
+        })
+
+        appendImportedBatchItems(parsedRows)
+      } else {
+        showToast('error', '仅支持 .txt .csv .tsv .xlsx .xls 文件导入')
+      }
+    } catch {
+      showToast('error', '导入失败：文件内容无法解析，请检查格式是否符合 A 列名称 / B 列链接')
+    } finally {
+      event.target.value = ''
+    }
+  }
+
   const startBatch = async () => {
     if (batchItems.length === 0) {
       showToast('error', '请先添加下载链接')
@@ -407,7 +679,7 @@ export default function Home() {
 
     setIsBatchRunning(true)
     for (const item of batchItems) {
-      setBatchItems((prev) => prev.map((entry) => entry.id === item.id ? { ...entry, status: 'running' } : entry))
+      setBatchItems((prev) => prev.map((entry) => entry.id === item.id ? { ...entry, status: 'running', taskId: undefined } : entry))
 
       const options = {
         url: item.url,
@@ -468,9 +740,9 @@ export default function Home() {
         }
         addTask(task)
         setActiveTask(taskId)
-        setBatchItems((prev) => prev.map((entry) => entry.id === item.id ? { ...entry, status: 'completed', progress: 100 } : entry))
+        setBatchItems((prev) => prev.map((entry) => entry.id === item.id ? { ...entry, status: 'running', taskId } : entry))
       } else {
-        setBatchItems((prev) => prev.map((entry) => entry.id === item.id ? { ...entry, status: 'failed' } : entry))
+        setBatchItems((prev) => prev.map((entry) => entry.id === item.id ? { ...entry, status: 'failed', taskId: undefined } : entry))
       }
     }
 
@@ -478,91 +750,201 @@ export default function Home() {
     showToast('success', '批量下载已处理完成')
   }
 
-  const renderTaskRow = (task: DownloadTask) => {
-    const meta = getTaskMeta(task)
-    const tone = statusMap[task.status].tone
-    const Icon = isRecordTask(task) ? Radio : Download
-    const isReady = task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled'
+  const syncTaskRuntimeFlags = () => {
+    const liveTasks = useDownloadStore.getState().tasks
+    const hasActiveDownload = liveTasks.some((candidate) => !isRecordTask(candidate) && (candidate.status === 'pending' || candidate.status === 'running'))
+    const hasActiveRecord = liveTasks.some((candidate) => isRecordTask(candidate) && (candidate.status === 'pending' || candidate.status === 'running'))
 
-    return (
-      <div key={task.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-        <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${isRecordTask(task) ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>
-          <Icon size={18} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h3 className="truncate text-[15px] font-semibold text-slate-800">{task.saveName || task.url}</h3>
-          <p className="mt-1 text-xs text-slate-500">{meta.secondary} · {meta.tag}</p>
-        </div>
-        <div className="text-right">
-          <div className="text-[11px] text-slate-500">{meta.status}</div>
-          <span className={`mt-1 inline-flex rounded-full px-2 py-1 text-[11px] font-bold ${tone}`}>
-            {isReady ? (task.status === 'completed' ? '完成' : task.status === 'failed' ? '失败' : '取消') : meta.progressText}
-          </span>
-        </div>
-      </div>
-    )
-  }
-
-  const renderStatusPanel = () => {
-    if (!currentTask) {
-      return (
-        <div className="card p-5">
-          <div className="text-[11px] font-bold tracking-[0.18em] text-slate-500 uppercase">实时状态</div>
-          <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">
-            暂无{activeTab === 'download' ? '下载' : '录制'}任务，先在当前页创建任务即可。
-          </div>
-        </div>
-      )
+    setIsDownloading(hasActiveDownload)
+    if (!hasActiveDownload && downloadTimerRef.current) {
+      clearInterval(downloadTimerRef.current)
+      downloadTimerRef.current = null
     }
 
-    const progress = Math.min(100, Math.max(0, currentTask.progress || 0))
-    const meta = getTaskMeta(currentTask)
-    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - new Date(currentTask.startTime).getTime()) / 1000))
-    const speedValue = currentTask.speed || '0 KB/s'
+    setIsRecording(hasActiveRecord)
+    if (!hasActiveRecord && recordTimerRef.current) {
+      clearInterval(recordTimerRef.current)
+      recordTimerRef.current = null
+    }
+  }
+
+  const deleteTaskArtifactsAndCleanup = async (task: DownloadTask) => {
+    try {
+      const result = await (window.api as any).download.delete(task.id, {
+        saveDir: task.saveDir || settings.saveDir,
+        saveName: task.saveName,
+        tmpDir: task.options?.tmpDir || settings.tmpDir,
+        outputPath: (task.options as any)?.outputPath,
+        options: task.options || {}
+      })
+      if (!result?.success) {
+        return { success: false, message: result?.error || '清理失败：相关下载文件未能删除' }
+      }
+      removeTask(task.id)
+      await (window.api as any).runtime.remove(task.id)
+      if (task.id === activeTaskId) setActiveTask(null)
+      await removeRecord(task.id)
+      syncTaskRuntimeFlags()
+      return { success: true, message: '已删除相关下载文件和临时文件' }
+    } catch {
+      return { success: false, message: '清理失败：相关下载文件未能删除' }
+    }
+  }
+
+  const handleTaskCancel = async (task: DownloadTask) => {
+    const actionText = '取消' as const
+    try {
+      const cancelResult = await window.api.download.cancel(task.id)
+      if (!cancelResult?.success) {
+        showToast('error', getTaskActionMessage(actionText, 'error', '任务可能已结束，已下载文件未被清理'))
+        return
+      }
+
+      const cleanupResult = await deleteTaskArtifactsAndCleanup(task)
+      updateTask(task.id, {
+        status: 'cancelled',
+        latestLog: cleanupResult.success ? getTaskActionMessage(actionText, 'success', '已删除已下载文件与临时文件') : getTaskActionMessage(actionText, 'success', '已取消，但清理未完全成功')
+      })
+      if (activeTaskId === task.id) {
+        setActiveTask(null)
+      }
+      syncTaskRuntimeFlags()
+      showToast('info', cleanupResult.success
+        ? getTaskActionMessage(actionText, 'success', '已删除已下载文件和临时文件')
+        : getTaskActionMessage(actionText, 'success', '已取消，但部分文件清理失败'))
+    } catch {
+      showToast('error', getTaskActionMessage(actionText, 'error', '任务未能正常终止，已下载文件未被清理'))
+    }
+  }
+
+  const handleTaskRetry = async (task: DownloadTask) => {
+    const actionText = '重试' as const
+    const options = {
+      ...(task.options || {}),
+      url: task.url,
+      saveName: task.saveName,
+      saveDir: task.saveDir || settings.saveDir,
+      tmpDir: task.options?.tmpDir || settings.tmpDir,
+      customArgs: task.options?.customArgs || settings.customArgs || undefined,
+      maxSpeed: task.options?.maxSpeed || settings.maxSpeed || undefined,
+      proxy: task.options?.proxy || settings.proxy || undefined,
+      headers: Object.keys(task.options?.headers || {}).length > 0 ? task.options.headers : (Object.keys(settings.headers).length > 0 ? settings.headers : undefined),
+      logLevel: task.options?.logLevel || settings.logLevel
+    }
+
+    try {
+      const cleanupResult = await deleteTaskArtifactsAndCleanup(task)
+      if (!cleanupResult.success) {
+        showToast('error', getTaskActionMessage(actionText, 'error', cleanupResult.message))
+        return
+      }
+
+      const result = await window.api.download.start(options)
+      if (!result?.success) {
+        showToast('error', getTaskActionMessage(actionText, 'error', result?.error || '未知错误'))
+        return
+      }
+      const newTaskId = result.taskId || generateId()
+      const recreated: DownloadTask = {
+        ...task,
+        id: newTaskId,
+        status: 'pending',
+        progress: 0,
+        speed: '0 KB/s',
+        downloadedSegments: 0,
+        totalSegments: task.totalSegments || 0,
+        downloadedBytes: 0,
+        totalBytes: task.totalBytes || 0,
+        etaSeconds: 0,
+        latestLog: `${actionText}中`,
+        startTime: new Date().toISOString(),
+        logs: [{ timestamp: new Date().toISOString(), level: 'INFO', message: `${actionText}中` }],
+        options
+      }
+      addTask(recreated)
+      setActiveTask(newTaskId)
+      showToast('success', getTaskActionMessage(actionText, 'success', '旧任务残留已清理，正在重新下载'))
+    } catch {
+      showToast('error', getTaskActionMessage(actionText, 'error', '无法重新启动任务，旧下载残留未清理'))
+    }
+  }
+
+  const handleTaskDelete = async (task: DownloadTask) => {
+    const actionText = '删除' as const
+    try {
+      const cleanupResult = await deleteTaskArtifactsAndCleanup(task)
+      if (!cleanupResult.success) {
+        showToast('error', getTaskActionMessage(actionText, 'error', cleanupResult.message))
+        return
+      }
+      showToast('success', getTaskActionMessage(actionText, 'success', '已清理相关下载文件和临时文件'))
+    } catch {
+      showToast('error', getTaskActionMessage(actionText, 'error', '任务文件可能还在，未能完成清理'))
+    } finally {
+      setDeleteConfirmTask(null)
+    }
+  }
+
+  const openDeleteConfirm = (task: DownloadTask) => {
+    setDeleteConfirmTask(task)
+  }
+
+  const renderTaskRow = (task: DownloadTask, index: number) => {
+    const progress = Math.min(100, Math.max(0, Number(task.progress) || 0))
+    const canCancel = task.status === 'running' || task.status === 'pending'
+    const canRetry = task.status === 'failed' || task.status === 'cancelled'
+    const canDelete = task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled'
+    const statusText = task.status === 'completed' ? '已完成' : task.status === 'failed' ? '失败' : task.status === 'cancelled' ? '已取消' : task.status === 'running' ? '下载中' : '等待中'
 
     return (
-      <div className="card p-5">
-        <div className="text-[11px] font-bold tracking-[0.18em] text-slate-500 uppercase">实时状态</div>
-        <div className="mt-3 flex items-center justify-between gap-3">
-          <h3 className="text-[22px] font-bold tracking-tight text-slate-900">{currentTask.saveName}</h3>
-          <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${statusMap[currentTask.status].tone}`}>
-            {meta.status}
-          </span>
-        </div>
+      <div key={task.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-2.5 shadow-sm">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-[11px] font-bold text-slate-600">
+            {index + 1}
+          </div>
 
-        <div className="mt-5">
-          <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>{activeTab === 'download' ? '下载进度' : '录制进度'}</span>
-            <strong className="text-sm font-bold text-slate-800">{Math.round(progress)}%</strong>
-          </div>
-          <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-100">
-            <div
-              className={`h-full rounded-full ${activeTab === 'download' ? 'bg-gradient-to-r from-blue-500 to-cyan-400' : 'bg-gradient-to-r from-red-500 to-orange-400'}`}
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-        </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="truncate text-[14px] font-semibold text-slate-800">{task.saveName || task.url}</h3>
+              <span className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${statusMap[task.status].tone}`}>
+                {statusText}
+              </span>
+            </div>
 
-        <div className="mt-5 grid grid-cols-3 gap-2.5">
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
-            <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400">{activeTab === 'download' ? '下载速度' : '实时速率'}</div>
-            <div className="mt-2 text-lg font-bold text-slate-800">{speedValue}</div>
+            <div className="mt-1.5 flex items-center gap-2">
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-200">
+                <div
+                  className={`h-full rounded-full ${task.status === 'completed' ? 'bg-emerald-500' : task.status === 'failed' ? 'bg-red-500' : task.status === 'cancelled' ? 'bg-amber-500' : 'bg-blue-500'}`}
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+              <span className="text-[10px] font-medium text-slate-500">{Math.round(progress)}%</span>
+            </div>
           </div>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
-            <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400">{activeTab === 'download' ? '已完成' : '片段'}</div>
-            <div className="mt-2 text-lg font-bold text-slate-800">{activeTab === 'download' ? `${Math.round(progress)}%` : `${currentTask.downloadedSegments || 0}/${currentTask.totalSegments || 0}`}</div>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
-            <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400">{activeTab === 'download' ? '用时' : '时长'}</div>
-            <div className="mt-2 text-lg font-bold text-slate-800">{formatDuration(elapsedSeconds)}</div>
-          </div>
-        </div>
 
-        <div className="mt-5 space-y-2.5">
-          <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-sm"><span className="text-slate-500">任务类型</span><strong className="font-semibold text-slate-800">{meta.tag}</strong></div>
-          <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-sm"><span className="text-slate-500">状态</span><strong className="font-semibold text-slate-800">{meta.status}</strong></div>
-          <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-sm"><span className="text-slate-500">保存目录</span><strong className="font-semibold text-slate-800">{currentTask.saveDir || settings.saveDir || '未配置'}</strong></div>
-          <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-sm"><span className="text-slate-500">数据量</span><strong className="font-semibold text-slate-800">{currentTask.totalSegments > 0 ? `${currentTask.downloadedSegments || 0} / ${currentTask.totalSegments}` : '待开始'}</strong></div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              onClick={() => canCancel && handleTaskCancel(task)}
+              disabled={!canCancel}
+              className={`rounded-md border px-2 py-1 text-[10px] font-medium ${canCancel ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100' : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'}`}
+            >
+              取消
+            </button>
+            <button
+              onClick={() => canRetry && handleTaskRetry(task)}
+              disabled={!canRetry}
+              className={`rounded-md border px-2 py-1 text-[10px] font-medium ${canRetry ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'}`}
+            >
+              重试
+            </button>
+            <button
+              onClick={() => canDelete && openDeleteConfirm(task)}
+              disabled={!canDelete}
+              className={`rounded-md border px-2 py-1 text-[10px] font-medium ${canDelete ? 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100' : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'}`}
+            >
+              删除
+            </button>
+          </div>
         </div>
       </div>
     )
@@ -570,13 +952,57 @@ export default function Home() {
 
   return (
     <div className="space-y-6">
-      <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="flex items-start justify-between gap-4">
+      {deleteConfirmTask && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-4 backdrop-blur-[1px]">
+          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_18px_45px_rgba(15,23,42,0.18)]">
+            <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-red-50 text-red-600">
+                  <Trash2 size={18} />
+                </div>
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">确认操作</div>
+                  <h3 className="mt-1 text-lg font-semibold text-slate-800">删除任务</h3>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">任务名称</div>
+                <div className="mt-1 truncate text-sm font-semibold text-slate-700">{deleteConfirmTask.saveName || deleteConfirmTask.url}</div>
+              </div>
+
+              <p className="text-sm leading-6 text-slate-600">
+                删除后将同时清理已下载文件、临时文件和相关缓存内容，操作无法撤销。
+              </p>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  onClick={() => setDeleteConfirmTask(null)}
+                  className="rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => handleTaskDelete(deleteConfirmTask)}
+                  className="rounded-lg border border-red-200 bg-red-600 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-red-500"
+                >
+                  确认删除
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-start justify-between gap-4">
         <div>
           <div className="text-[11px] font-bold tracking-[0.18em] text-slate-500 uppercase">Overview</div>
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">任务总览</h1>
         </div>
         <div className="flex items-center gap-2" />
-      </motion.div>
+      </div>
 
       <div className="flex justify-center">
         <div className="w-full max-w-[340px] rounded-2xl border border-slate-200 bg-white p-1.5 shadow-sm">
@@ -597,48 +1023,8 @@ export default function Home() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
-        <div className="card h-full p-4">
-          <div className="flex h-full flex-col justify-between gap-3">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400">总任务</span>
-              <Activity size={14} className="text-slate-400" />
-            </div>
-            <div className="text-2xl font-bold text-slate-800">{totalTaskCount}</div>
-          </div>
-        </div>
-        <div className="card h-full p-4">
-          <div className="flex h-full flex-col justify-between gap-3">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400">进行中</span>
-              <Sparkles size={14} className="text-blue-400" />
-            </div>
-            <div className="text-2xl font-bold text-slate-800">{runningTaskCount}</div>
-          </div>
-        </div>
-        <div className="card h-full p-4">
-          <div className="flex h-full flex-col justify-between gap-3">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400">已完成</span>
-              <CheckCircle2 size={14} className="text-emerald-500" />
-            </div>
-            <div className="text-2xl font-bold text-slate-800">{completedTaskCount}</div>
-          </div>
-        </div>
-        <div className="card h-full p-4">
-          <div className="flex h-full flex-col justify-between gap-3">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400">最近记录</span>
-              <FolderOpen size={14} className="text-slate-400" />
-            </div>
-            <div className="text-base font-bold text-slate-800">{lastHistoryRecord ? lastHistoryRecord.saveName : '暂无'}</div>
-          </div>
-        </div>
-      </div>
-
       {activeTab === 'download' ? (
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.7fr)_360px]">
-          <div className="space-y-6">
+        <div className="space-y-6">
             <div className="card p-5">
               <div className="flex items-center gap-2 mb-3">
                 <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
@@ -722,17 +1108,31 @@ export default function Home() {
               <textarea
                 value={batchText}
                 onChange={(e) => setBatchText(e.target.value)}
-                placeholder={'每行粘贴一个 URL\nhttps://example.com/video1.m3u8\nhttps://example.com/video2.m3u8'}
+                placeholder={'每行粘贴一个 URL\nhttps://example.com/video1.m3u8\nhttps://example.com/video2.m3u8\n\n也可导入 .txt / .csv / .xlsx 表格，固定按 A 列名称、B 列链接解析'}
                 className="input-field h-28 resize-none font-mono text-sm"
               />
 
-              <div className="mt-4 flex gap-2">
+              <div className="mt-4 flex flex-wrap gap-2">
                 <button onClick={parseBatchUrls} className="btn-primary flex items-center gap-1.5 text-sm"><Play size={15} /> 解析链接</button>
+                <button
+                  onClick={() => batchFileInputRef.current?.click()}
+                  className="btn-secondary flex items-center gap-1.5 text-sm"
+                >
+                  <Upload size={15} /> 导入表格
+                </button>
                 <button onClick={() => { setBatchText(''); setBatchItems([]) }} className="btn-secondary flex items-center gap-1.5 text-sm"><Trash2 size={15} /> 清空</button>
                 <button onClick={startBatch} disabled={isBatchRunning || batchItems.length === 0} className="btn-secondary flex items-center gap-1.5 text-sm">
                   {isBatchRunning ? '处理中...' : '开始全部'}
                 </button>
               </div>
+
+              <input
+                ref={batchFileInputRef}
+                type="file"
+                accept=".txt,.csv,.tsv,.xls,.xlsx"
+                className="hidden"
+                onChange={handleBatchImport}
+              />
 
               {batchItems.length > 0 && (
                 <div className="mt-4 space-y-2">
@@ -750,14 +1150,10 @@ export default function Home() {
                 </div>
               )}
             </div>
-          </div>
-
-          {renderStatusPanel()}
-        </div>
+       </div>
       ) : (
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.7fr)_360px]">
-          <div className="space-y-6">
-            <div className="card p-5 bg-gradient-to-br from-white to-red-50/40">
+       <div className="space-y-6">
+           <div className="card p-5 bg-gradient-to-br from-white to-red-50/40">
               <div className="flex items-center gap-2 mb-3">
                 <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-red-50 text-red-600">
                   <Radio size={15} />
@@ -825,34 +1221,31 @@ export default function Home() {
                 </div>
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400">容量</div>
-                  <div className="mt-2 text-lg font-bold text-slate-800">{formatFileSize(recordSize)}</div>
+                  <div className="mt-2 text-lg font-bold text-slate-800">{formatFileSize(recordSize || currentTask?.downloadedBytes || 0)}</div>
                 </div>
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400">状态</div>
                   <div className="mt-2 text-lg font-bold text-slate-800">{isRecording ? '在线' : '空闲'}</div>
                 </div>
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400">帧率</div>
-                  <div className="mt-2 text-lg font-bold text-slate-800">29.97</div>
+                  <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400">速率</div>
+                  <div className="mt-2 text-lg font-bold text-slate-800">{(currentTask?.speed || '0 KB/s').replace(/\s+$/, '')}</div>
                 </div>
               </div>
             </div>
-          </div>
-
-          {renderStatusPanel()}
-        </div>
+       </div>
       )}
 
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <div className="text-[11px] font-bold tracking-[0.18em] text-slate-500 uppercase">任务列表</div>
-          <span className="text-xs text-slate-500">{tasks.length} 个任务</span>
+          <span className="text-xs text-slate-500">{(activeTab === 'download' ? downloadTasks : recordTasks).length} 个任务</span>
         </div>
         <div className="card p-3">
           <div className="space-y-2">
-            {tasks.length > 0 ? tasks.map(renderTaskRow) : (
+            {(activeTab === 'download' ? downloadTasks : recordTasks).length > 0 ? (activeTab === 'download' ? downloadTasks : recordTasks).map((task, index) => renderTaskRow(task, index)) : (
               <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500 text-center">
-                暂无任务，直接在上方创建下载或录制任务。
+                暂无{activeTab === 'download' ? '下载' : '录制'}任务，直接在上方创建{activeTab === 'download' ? '下载' : '录制'}任务。
               </div>
             )}
           </div>

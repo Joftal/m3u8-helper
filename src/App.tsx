@@ -7,16 +7,16 @@ import History from '@/pages/History'
 import Settings from '@/pages/Settings'
 import About from '@/pages/About'
 import { useSettingsStore } from '@/store/settingsStore'
-import { useHistoryStore } from '@/store/historyStore'
+import { useDownloadStore } from '@/store/downloadStore'
 
 export default function App() {
   const { loadSettings } = useSettingsStore()
-  const { loadHistory } = useHistoryStore()
+  const { loadRuntimeTasks } = useDownloadStore()
 
   useEffect(() => {
     loadSettings()
-    loadHistory()
-  }, [])
+    loadRuntimeTasks()
+  }, [loadSettings, loadRuntimeTasks])
 
   return (
     <HashRouter>

@@ -1,12 +1,43 @@
 import { NavLink } from 'react-router-dom'
 import {
   Home,
-  Clock,
   Settings,
-  Info
+  Info,
+  Gauge,
+  Clock
 } from 'lucide-react'
 import { useDownloadStore } from '@/store/downloadStore'
-import { useHistoryStore } from '@/store/historyStore'
+
+function formatNetworkSpeed(bytesPerSecond: number): string {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 KB/s'
+
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
+  let value = bytesPerSecond
+  let unitIndex = 0
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+
+  const precision = value >= 10 ? 1 : 2
+  return `${value.toFixed(precision)} ${units[unitIndex]}`
+}
+
+function parseSpeedToBytesPerSecond(raw: string): number {
+  const match = raw.match(/([\d.]+)\s*(B\/s|KB\/s|MB\/s|GB\/s|Bps|KBps|MBps|GBps)/i)
+  if (!match) return 0
+
+  const value = Number(match[1]) || 0
+  const unit = match[2].toLowerCase().replace(/ps$/, '/s')
+  const base: Record<string, number> = {
+    'b/s': 1,
+    'kb/s': 1024,
+    'mb/s': 1024 * 1024,
+    'gb/s': 1024 * 1024 * 1024
+  }
+  return value * (base[unit] ?? 1)
+}
 
 const navItems = [
   { path: '/', icon: Home, label: '任务总览' },
@@ -17,11 +48,11 @@ const navItems = [
 
 export default function Sidebar() {
   const { tasks } = useDownloadStore()
-  const { records } = useHistoryStore()
-
-  const activeCount = tasks.filter((task) => task.status === 'running' || task.status === 'pending').length
-  const completedCount = tasks.filter((task) => task.status === 'completed').length + records.filter((record) => record.status === 'completed').length
-  const totalCount = tasks.length
+  const helperNetworkSpeed = (() => {
+    const activeRunningTasks = tasks.filter((task) => task.status === 'running' || task.status === 'pending')
+    const totalBytesPerSecond = activeRunningTasks.reduce((sum, task) => sum + parseSpeedToBytesPerSecond(task.speed || '0 KB/s'), 0)
+    return formatNetworkSpeed(totalBytesPerSecond)
+  })()
 
   return (
     <aside className="flex h-full w-60 flex-col border-r border-slate-200/80 bg-[linear-gradient(180deg,#f8fafc_0%,#eef4ff_100%)]">
@@ -56,17 +87,14 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      <div className="m-4 rounded-2xl border border-slate-200 bg-white/80 p-3.5 shadow-[0_10px_24px_rgba(15,23,42,0.04)]">
-        <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">运行状态</p>
-        <div className="space-y-2 text-[12px] text-slate-600">
-          <div className="flex items-center justify-between"><span>当前任务</span><strong className="text-slate-900">{totalCount}</strong></div>
-          <div className="flex items-center justify-between"><span>进行中</span><strong className="text-slate-900">{activeCount}</strong></div>
-          <div className="flex items-center justify-between"><span>已完成</span><strong className="text-slate-900">{completedCount}</strong></div>
-        </div>
-      </div>
-
       <div className="border-t border-slate-200/80 p-4">
-        <p className="text-center text-[11px] text-slate-400">v1.0.0 · m3u8-box</p>
+        <div className="rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">
+          <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-slate-400">
+            <Gauge size={12} />
+            网络速度
+          </div>
+          <div className="mt-2 text-lg font-bold tracking-tight text-slate-800">{helperNetworkSpeed}</div>
+        </div>
       </div>
     </aside>
   )

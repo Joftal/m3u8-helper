@@ -8,6 +8,11 @@ export interface DownloadTask {
   speed: string
   downloadedSegments: number
   totalSegments: number
+  downloadedBytes?: number
+  totalBytes?: number
+  etaSeconds?: number
+  currentFrameRate?: number
+  latestLog?: string
   startTime: string
   endTime?: string
   logs: LogEntry[]

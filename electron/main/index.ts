@@ -2,17 +2,18 @@ import { app, BrowserWindow, shell, nativeImage } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from '../ipc-handlers'
-import { initStore } from '../store'
+import { getStore, initStore } from '../store'
 
 let mainWindow: BrowserWindow | null = null
 
 function createWindow(): void {
   const iconPath = join(__dirname, '../../resources/icon.png')
   const icon = nativeImage.createFromPath(iconPath)
+  const persistedWindowState = getStore().get('windowState') || { width: 1280, height: 800, maximized: false }
 
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: persistedWindowState.width || 1280,
+    height: persistedWindowState.height || 800,
     minWidth: 960,
     minHeight: 640,
     show: false,
@@ -27,6 +28,10 @@ function createWindow(): void {
       nodeIntegration: false
     }
   })
+
+  if (persistedWindowState.maximized) {
+    mainWindow.maximize()
+  }
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
@@ -43,6 +48,15 @@ function createWindow(): void {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
+  const saveWindowState = () => {
+    if (!mainWindow) return
+    getStore().set('windowState', {
+      width: mainWindow.getBounds().width,
+      height: mainWindow.getBounds().height,
+      maximized: mainWindow.isMaximized()
+    })
+  }
+
   // 窗口控制 IPC
   const { ipcMain } = require('electron')
   ipcMain.on('window:minimize', () => mainWindow?.minimize())
@@ -57,11 +71,14 @@ function createWindow(): void {
   ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized() ?? false)
 
   mainWindow.on('maximize', () => {
+    saveWindowState()
     mainWindow?.webContents.send('window:maximized-changed', true)
   })
   mainWindow.on('unmaximize', () => {
+    saveWindowState()
     mainWindow?.webContents.send('window:maximized-changed', false)
   })
+  mainWindow.on('resize', saveWindowState)
 }
 
 app.whenReady().then(() => {
