@@ -1,12 +1,14 @@
 ﻿import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Settings, FolderOpen, Cpu, Film, Globe, Save, Zap, Type, Key, Filter, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { Settings, FolderOpen, Cpu, Film, Globe, Save, Zap, Type, Key, Filter, CheckCircle2, AlertTriangle, RotateCcw } from 'lucide-react'
 import { useSettingsStore } from '@/store/settingsStore'
+import Modal from '@/components/Modal'
 import { showToast } from '@/components/Toast'
 
 export default function SettingsPage() {
-  const { settings, loaded, loadSettings, updateSetting } = useSettingsStore()
+  const { settings, loaded, loadSettings, updateSetting, resetSettings } = useSettingsStore()
   const [adKeywordInput, setAdKeywordInput] = useState('')
+  const [showResetConfirm, setShowResetConfirm] = useState(false)
 
   useEffect(() => {
     if (!loaded) loadSettings()
@@ -52,7 +54,45 @@ export default function SettingsPage() {
           <div className="page-kicker">Settings</div>
           <h1 className="page-title">应用设置</h1>
         </div>
+        <button
+          onClick={() => setShowResetConfirm(true)}
+          className="btn-secondary px-3.5 text-sm"
+        >
+          恢复默认
+        </button>
       </motion.div>
+
+      <Modal open={showResetConfirm} onClose={() => setShowResetConfirm(false)} title="恢复默认配置" width="max-w-md">
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800">
+            <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-600">
+              <RotateCcw size={16} />
+            </div>
+            <div className="leading-6">
+              将恢复除“工具路径”和“网络设置”外的默认配置。已保存的工具路径与代理配置不会被清除。
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button
+              onClick={() => setShowResetConfirm(false)}
+              className="rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+            >
+              取消
+            </button>
+            <button
+              onClick={async () => {
+                setShowResetConfirm(false)
+                await resetSettings()
+                showToast('success', '已恢复默认配置（不含工具路径和网络设置）')
+              }}
+              className="rounded-lg border border-amber-200 bg-amber-600 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-amber-500"
+            >
+              确认恢复
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       <div className="settings-grid">
         <Section icon={<Cpu size={15} className="text-blue-600" />} color="bg-blue-100 text-blue-700" title="工具路径" delay={0.02}>

@@ -61,7 +61,9 @@ const api = {
   settings: {
     get: (key?: string) => ipcRenderer.invoke('settings:get', key),
     set: (key: string, value: any) => ipcRenderer.invoke('settings:set', key, value),
-    getAll: () => ipcRenderer.invoke('settings:getAll')
+    getAll: () => ipcRenderer.invoke('settings:getAll'),
+    getDefaults: () => ipcRenderer.invoke('settings:getDefaults'),
+    resetAll: (excludedKeys?: string[]) => ipcRenderer.invoke('settings:resetAll', excludedKeys)
   },
 
   // 历史

@@ -36,13 +36,6 @@ export default function Toast() {
     warning: <AlertTriangle size={16} className="text-amber-500" />
   }
 
-  const borderColors = {
-    success: 'border-l-emerald-500',
-    error: 'border-l-red-500',
-    info: 'border-l-primary-500',
-    warning: 'border-l-amber-500'
-  }
-
   return (
     <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2">
       <AnimatePresence>
@@ -52,7 +45,7 @@ export default function Toast() {
             initial={{ opacity: 0, y: 12, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -8, scale: 0.97 }}
-            className={`bg-white px-4 py-3 rounded-lg border border-gray-100 border-l-4 flex items-center gap-3 min-w-[260px] max-w-[380px] ${borderColors[toast.type]}`}
+            className="bg-white px-4 py-3 rounded-lg border border-gray-100 flex items-center gap-3 min-w-[260px] max-w-[380px]"
             style={{ boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
           >
             {icons[toast.type]}

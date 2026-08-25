@@ -20,7 +20,9 @@
         "arch": ["x64"]
       }
     ],
-    "icon": "resources/icon.png"
+    "icon": "resources/icon.png",
+    "sign": false,
+    "signAndEditExecutable": false
   },
   "nsis": {
     "oneClick": false,

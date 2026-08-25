@@ -1,7 +1,8 @@
 import { create } from 'zustand'
 import type { AppSettings } from '@/types/settings'
+import { validateSettingValue, validateSettings } from '@/utils/validators'
 
-const defaultSettings: AppSettings = {
+export const defaultSettings: AppSettings = {
   exePath: '',
   ffmpegPath: '',
   mp4decryptPath: '',
@@ -51,12 +52,23 @@ const defaultSettings: AppSettings = {
   customArgs: ''
 }
 
+export const resetExcludedKeys = [
+  'exePath',
+  'ffmpegPath',
+  'mp4decryptPath',
+  'baseUrl',
+  'proxy',
+  'useSystemProxy',
+  'headers'
+] as const satisfies readonly (keyof AppSettings)[]
+
 interface SettingsStore {
   settings: AppSettings
   loaded: boolean
   loadSettings: () => Promise<void>
   updateSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => Promise<void>
   updateSettings: (updates: Partial<AppSettings>) => void
+  resetSettings: () => Promise<void>
 }
 
 export const useSettingsStore = create<SettingsStore>((set) => ({
@@ -64,19 +76,50 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
   loaded: false,
   loadSettings: async () => {
     try {
-      const settings = await window.api.settings.getAll()
-      if (settings) set({ settings: { ...defaultSettings, ...settings }, loaded: true })
-      else set({ loaded: true })
+      const [settings, defaultValues] = await Promise.all([
+        window.api.settings.getAll(),
+        window.api.settings.getDefaults()
+      ])
+      const mergedDefaults = { ...defaultSettings, ...defaultValues }
+      const sanitized = settings ? (validateSettings(settings as unknown as Record<string, unknown>).settings as unknown as AppSettings) : mergedDefaults
+      set({ settings: { ...mergedDefaults, ...sanitized }, loaded: true })
     } catch { set({ loaded: true }) }
   },
   updateSetting: async (key, value) => {
-    set((state) => ({ settings: { ...state.settings, [key]: value } }))
-    await window.api.settings.set(key, value)
+    const result = validateSettingValue(key, value)
+    if (!result.valid) return
+
+    set((state) => ({ settings: { ...state.settings, [key]: result.value } }))
+    await window.api.settings.set(key, result.value)
   },
   updateSettings: async (updates) => {
-    set((state) => ({ settings: { ...state.settings, ...updates } }))
-    for (const [key, value] of Object.entries(updates)) {
+    const sanitized = validateSettings(updates as unknown as Record<string, unknown>).settings as unknown as Partial<AppSettings>
+    set((state) => ({ settings: { ...state.settings, ...sanitized } }))
+    for (const [key, value] of Object.entries(sanitized)) {
       await window.api.settings.set(key, value)
     }
+  },
+  resetSettings: async () => {
+    const [current, defaultValues] = await Promise.all([
+      window.api.settings.getAll(),
+      window.api.settings.getDefaults()
+    ])
+    const mergedDefaults = { ...defaultSettings, ...defaultValues }
+    const next: Record<string, any> = { ...mergedDefaults, ...(current ?? {}) }
+    const keys = Object.keys(mergedDefaults) as string[]
+
+    for (const key of keys) {
+      if (!(resetExcludedKeys as readonly string[]).includes(key)) {
+        next[key] = mergedDefaults[key]
+      }
+    }
+
+    for (const key of resetExcludedKeys as readonly string[]) {
+      next[key] = current?.[key] ?? mergedDefaults[key]
+    }
+
+    const sanitized = validateSettings(next as unknown as Record<string, unknown>).settings as unknown as AppSettings
+    set({ settings: sanitized, loaded: true })
+    await window.api.settings.resetAll([...resetExcludedKeys])
   }
 }))

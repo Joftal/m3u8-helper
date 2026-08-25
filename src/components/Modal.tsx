@@ -1,3 +1,5 @@
+import { useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X } from 'lucide-react'
 
@@ -10,7 +12,18 @@ interface ModalProps {
 }
 
 export default function Modal({ open, onClose, title, children, width = 'max-w-lg' }: ModalProps) {
-  return (
+  useEffect(() => {
+    if (!open) return
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+    }
+  }, [open])
+
+  const content = (
     <AnimatePresence>
       {open && (
         <>
@@ -18,13 +31,14 @@ export default function Modal({ open, onClose, title, children, width = 'max-w-l
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
             onClick={onClose}
-            className="fixed inset-0 z-40 bg-black/30"
+            className="fixed inset-0 z-40 bg-black/30 backdrop-blur-[1px]"
           />
           <motion.div
-            initial={{ opacity: 0, scale: 0.97, y: 12 }}
+            initial={{ opacity: 0, scale: 0.97, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.97, y: 12 }}
+            exit={{ opacity: 0, scale: 0.97, y: 10 }}
             transition={{ type: 'spring', damping: 28, stiffness: 350 }}
             className="fixed inset-0 z-50 flex items-center justify-center p-4"
           >
@@ -48,4 +62,6 @@ export default function Modal({ open, onClose, title, children, width = 'max-w-l
       )}
     </AnimatePresence>
   )
+
+  return typeof document !== 'undefined' ? createPortal(content, document.body) : null
 }

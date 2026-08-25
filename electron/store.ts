@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { join, dirname } from 'path'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { sanitizeSettings } from '../src/utils/validators'
 
 function resolveAppStorageRoot(): string {
   const packagedRoot = app.isPackaged ? dirname(process.execPath) : ''
@@ -111,6 +112,12 @@ const defaults = {
   }
 }
 
+export const defaultSettings = JSON.parse(JSON.stringify(defaults.settings)) as typeof defaults.settings
+
+export function getDefaultSettings(): typeof defaultSettings {
+  return sanitizeSettings(JSON.parse(JSON.stringify(defaultSettings)))
+}
+
 type StoreSchema = typeof defaults
 
 type CategoryName = keyof StoreSchema
@@ -164,9 +171,33 @@ function saveCategory(category: CategoryName): void {
   }
 }
 
+export function resetSettings(excludedKeys: string[] = []): typeof defaultSettings {
+  const current: Record<string, any> = data.settings ?? JSON.parse(JSON.stringify(defaultSettings))
+  const exclude = new Set(excludedKeys)
+  const defaultMap: Record<string, any> = JSON.parse(JSON.stringify(defaultSettings))
+  const next: Record<string, any> = { ...defaultMap }
+
+  for (const key of Object.keys(defaultMap)) {
+    if (!exclude.has(key)) {
+      next[key] = defaultMap[key]
+    }
+  }
+
+  for (const key of exclude) {
+    if (current && Object.prototype.hasOwnProperty.call(current, key)) {
+      next[key] = current[key]
+    }
+  }
+
+  data.settings = sanitizeSettings(next) as typeof defaultSettings
+  saveCategory('settings')
+  return data.settings
+}
+
 export function initStore(): void {
+  const loadedSettings = sanitizeSettings(readCategoryJson('settings', JSON.parse(JSON.stringify(defaultSettings))))
   data = {
-    settings: readCategoryJson('settings', JSON.parse(JSON.stringify(defaults.settings))),
+    settings: loadedSettings,
     history: readCategoryJson('history', JSON.parse(JSON.stringify(defaults.history))),
     scheduledTasks: readCategoryJson('scheduledTasks', JSON.parse(JSON.stringify(defaults.scheduledTasks))),
     runtimeTasks: readCategoryJson('runtimeTasks', JSON.parse(JSON.stringify(defaults.runtimeTasks))),

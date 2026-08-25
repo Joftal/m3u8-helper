@@ -1,9 +1,10 @@
 import { BrowserWindow, dialog, ipcMain, app } from 'electron'
 import { existsSync } from 'fs'
-import { getStore } from './store'
+import { getDefaultSettings, getStore, resetSettings } from './store'
 import { startDownload, cancelDownload, getActiveTasks, deleteTaskArtifacts } from './downloader'
 import { addScheduledTask, removeScheduledTask, getScheduledTasks } from './scheduler'
 import { delimiter, dirname, join } from 'path'
+import { validateSettingValue } from '../src/utils/validators'
 
 export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
   // ========== 下载 ==========
@@ -41,13 +42,26 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
 
   ipcMain.handle('settings:set', async (_, key, value) => {
     const store = getStore()
-    store.set(`settings.${key}` as any, value)
+    const validation = validateSettingValue(String(key), value)
+    if (!validation.valid) {
+      return { success: false, error: validation.message || '参数值非法' }
+    }
+    store.set(`settings.${key}` as any, validation.value)
     return { success: true }
   })
 
   ipcMain.handle('settings:getAll', async () => {
     const store = getStore()
     return store.get('settings')
+  })
+
+  ipcMain.handle('settings:getDefaults', async () => {
+    return getDefaultSettings()
+  })
+
+  ipcMain.handle('settings:resetAll', async (_, excludedKeys: string[] = []) => {
+    const settings = resetSettings(excludedKeys)
+    return { success: true, settings }
   })
 
   // ========== 历史 ==========

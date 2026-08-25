@@ -20,6 +20,8 @@ export interface ElectronAPI {
     get: (key?: string) => Promise<any>
     set: (key: string, value: any) => Promise<{ success: boolean }>
     getAll: () => Promise<any>
+    getDefaults: () => Promise<any>
+    resetAll: (excludedKeys?: string[]) => Promise<{ success: boolean; settings?: any }>
   }
   history: {
     getAll: () => Promise<any[]>
