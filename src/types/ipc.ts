@@ -7,7 +7,8 @@ export interface ElectronAPI {
     onMaximizedChanged: (callback: (maximized: boolean) => void) => () => void
   }
   download: {
-    start: (options: any) => Promise<{ success: boolean; taskId?: string; error?: string }>
+    /** options 为主进程解析后的生效参数（隔离 tmpDir 等），渲染端任务记录应以此为准 */
+    start: (options: any) => Promise<{ success: boolean; taskId?: string; options?: any; error?: string }>
     cancel: (taskId: string) => Promise<{ success: boolean }>
     delete: (taskId: string, taskInfo?: any) => Promise<{
       success: boolean

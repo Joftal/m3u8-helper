@@ -27,6 +27,13 @@ export interface DownloadOptions {
   // 必填
   url: string
 
+  /**
+   * GUI 元数据：任务类别标记（record = 直播录制）。
+   * 不传给 CLI，仅用于前端 Tab 分类与主进程产物清理/通知策略，
+   * 避免依赖 live 字段嗅探的脆弱判定（旧快照仍回退到字段嗅探）。
+   */
+  kind?: 'download' | 'record'
+
   // 文件管理
   saveName?: string
   saveDir?: string

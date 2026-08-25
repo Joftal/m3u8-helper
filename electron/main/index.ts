@@ -1,12 +1,19 @@
-import { app, BrowserWindow, ipcMain, shell, nativeImage } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell, nativeImage } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from '../ipc-handlers'
 import { getStore, initStore } from '../store'
-import { interruptOrphanedRuntimeTasks } from '../downloader'
+import { interruptOrphanedRuntimeTasks, countActiveRecordTasks, cancelAllRecordTasks, sweepOrphanedEmptyTmpDirs } from '../downloader'
 import { initScheduler } from '../scheduler'
 
 let mainWindow: BrowserWindow | null = null
+
+/**
+ * 录制在途时的退出放行标记：close 对话框与 before-quit 守卫共用。
+ * 首次确认后放行后续所有退出路径，避免二次弹窗；
+ * 同时保证"停止录制并退出"触发的 app.quit() 不会再被守卫拦回。
+ */
+let recordQuitConfirmed = false
 
 /** 窗口控制 IPC：仅注册一次（处理器通过模块级 mainWindow 引用当前窗口），避免重建窗口时重复注册 */
 function registerWindowControls(): void {
@@ -93,7 +100,34 @@ function createWindow(): void {
     }, 400)
   }
   mainWindow.on('resize', scheduleSaveWindowState)
-  mainWindow.on('close', () => {
+
+  // 有活跃录制时的退出拦截：录制不可暂停，静默关窗会截断长时间录制。
+  // 默认转入后台继续录制（second-instance 可重新唤起），确认后走取消路径保留产物。
+  mainWindow.on('close', (event) => {
+    if (!recordQuitConfirmed && mainWindow && countActiveRecordTasks() > 0) {
+      event.preventDefault()
+      const choice = dialog.showMessageBoxSync(mainWindow, {
+        type: 'warning',
+        title: '录制进行中',
+        message: `还有 ${countActiveRecordTasks()} 个录制任务正在进行`,
+        detail: '关闭应用会立即中断录制。已录内容（MKV 封装）通常仍可播放，但未写入的部分会丢失。',
+        buttons: ['最小化到后台继续录制', '停止录制并退出', '取消'],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true
+      })
+      if (choice === 0) {
+        mainWindow.hide()
+        return
+      }
+      if (choice === 1) {
+        recordQuitConfirmed = true
+        cancelAllRecordTasks()
+        mainWindow.close()
+      }
+      return
+    }
+
     if (saveStateTimer) {
       clearTimeout(saveStateTimer)
       saveStateTimer = null
@@ -108,14 +142,38 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', () => {
     if (mainWindow) {
+      if (!mainWindow.isVisible()) mainWindow.show()
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
+    }
+  })
+
+  // 程序化退出路径（系统关机、会话注销、autoUpdater 等）同样受录制守卫保护，
+  // 与 close 拦截共享 recordQuitConfirmed 放行标记，避免重复弹窗
+  app.on('before-quit', (event) => {
+    if (recordQuitConfirmed || countActiveRecordTasks() === 0) return
+    event.preventDefault()
+    const choice = dialog.showMessageBoxSync({
+      type: 'warning',
+      title: '录制进行中',
+      message: `还有 ${countActiveRecordTasks()} 个录制任务正在进行`,
+      detail: '退出会立即中断录制。已录内容（MKV 封装）通常仍可播放，但未写入的部分会丢失。',
+      buttons: ['停止录制并退出', '取消'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true
+    })
+    if (choice === 0) {
+      recordQuitConfirmed = true
+      cancelAllRecordTasks()
+      app.quit()
     }
   })
 
   app.whenReady().then(() => {
     initStore()
     interruptOrphanedRuntimeTasks()
+    sweepOrphanedEmptyTmpDirs()
     registerWindowControls()
     createWindow()
     registerIpcHandlers(mainWindow)

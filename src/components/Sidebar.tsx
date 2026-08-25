@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { useDownloadStore } from '@/store/downloadStore'
 import { formatNetworkSpeed, parseSpeedToBytesPerSecond } from '@/utils/speed'
+import { isRecordTask } from '@/utils/recording'
 
 const navItems = [
   { path: '/', icon: Home, label: '任务总览' },
@@ -23,6 +24,10 @@ export default function Sidebar() {
     const totalBytesPerSecond = activeRunningTasks.reduce((sum, task) => sum + parseSpeedToBytesPerSecond(task.speed || '0 KB/s'), 0)
     return formatNetworkSpeed(totalBytesPerSecond)
   })()
+
+  // 全局录制指示：录制任务被过滤在下载列表之外，离开录制 Tab 后用户仍需感知其存活
+  const activeRecordCount = tasks.filter((task) =>
+    (task.status === 'running' || task.status === 'pending') && isRecordTask(task)).length
 
   return (
     <aside className="flex h-full w-60 flex-col border-r border-slate-200/80 bg-[linear-gradient(180deg,#f8fafc_0%,#eef4ff_100%)]">
@@ -56,6 +61,18 @@ export default function Sidebar() {
           </NavLink>
         ))}
       </nav>
+
+      {activeRecordCount > 0 && (
+        <div className="mx-2.5 mb-2 flex items-center gap-2 rounded-xl border border-red-100 bg-red-50 px-3 py-2">
+          <span className="relative flex h-2 w-2 shrink-0">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
+          </span>
+          <span className="text-[12px] font-medium text-red-600">
+            录制中{activeRecordCount > 1 ? ` ×${activeRecordCount}` : ''}
+          </span>
+        </div>
+      )}
 
       <div className="border-t border-slate-200/80 p-4">
         <div className="rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">

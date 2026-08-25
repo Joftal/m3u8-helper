@@ -40,8 +40,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
   // ========== 下载 ==========
   ipcMain.handle('download:start', async (_, options) => {
     try {
-      const taskId = startDownload(options as DownloadOptions, mainWindow)
-      return { success: true, taskId }
+      const result = startDownload(options as DownloadOptions, mainWindow)
+      // 一并回传主进程解析后的生效参数（隔离 tmpDir、实际 saveDir 等），
+      // 渲染端任务记录以此为准，避免删除/重试链路拿到过期的基目录
+      return { success: true, taskId: result.taskId, options: result.options }
     } catch (error: any) {
       return { success: false, error: error.message }
     }

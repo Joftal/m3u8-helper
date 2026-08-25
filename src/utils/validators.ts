@@ -183,8 +183,10 @@ export function sanitizeSettings<T extends Record<string, unknown>>(settings: T)
 
 export function isValidUrl(url: string): boolean {
   try {
-    new URL(url)
-    return true
+    // 仅接受 http(s)：下载/录制入口与 N_m3u8DL-RE 的输入一致，
+    // 避免 file:、ftp: 等协议流入下载链路（与主进程 scheme 校验双保险）
+    const parsed = new URL(url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
   } catch {
     return false
   }

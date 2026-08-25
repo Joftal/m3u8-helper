@@ -1,10 +1,11 @@
 import { ChildProcess, spawn } from 'child_process'
 import { existsSync, mkdirSync, readdirSync, rmSync, promises as fsPromises } from 'fs'
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, nativeImage, Notification } from 'electron'
 import { basename, dirname, join } from 'path'
 import { getStore } from './store'
 import { isAllowedRecursiveDeleteTarget } from './path-safety'
 import { randomUUID } from 'crypto'
+import { isRecordTaskOptions } from '../src/utils/recording'
 import type { DownloadOptions } from '../src/types/download'
 import type { AppSettings } from '../src/types/settings'
 
@@ -95,6 +96,30 @@ function splitCustomArgs(raw: string): string[] {
   return tokens
 }
 
+/** 系统通知图标：与窗口图标同源；文件缺失时 createFromPath 返回空图，自动回退系统默认 */
+const NOTIFICATION_ICON = nativeImage.createFromPath(join(__dirname, '../../resources/icon.png'))
+
+/**
+ * 录制任务终态系统通知：
+ * - 失败必须提示 —— 后台挂机录制的异常终止对用户不可见，且已录内容已按策略保留；
+ * - 取消由用户主动触发（界面已有反馈），不重复打扰；
+ * - 主窗口聚焦时跳过（渲染端 toast 已覆盖），仅托盘/后台场景弹系统通知。
+ */
+function notifyRecordFinished(task: DownloadTask & Record<string, any>): void {
+  if (!isRecordTaskOptions(task.options) || task.status === 'cancelled') return
+  try {
+    if (!Notification.isSupported()) return
+    if (activeMainWindow?.isFocused()) return
+    const name = task.saveName || task.url
+    const body = task.status === 'failed'
+      ? `「${name}」录制异常终止，已录内容已保留`
+      : `「${name}」录制完成`
+    new Notification({ title: 'm3u8-helper · 录制任务', body, icon: NOTIFICATION_ICON }).show()
+  } catch {
+    // 通知属尽力而为的增强能力，失败不影响主流程
+  }
+}
+
 /**
  * 任务统一收尾：状态判定 → 通知渲染进程 → 清理产物与定时器 → 移除条目。
  *
@@ -137,16 +162,26 @@ function finalizeTask(taskId: string, exitCode: number | null): void {
     latestLog: task.latestLog
   })
 
-  // 失败与取消清理全部产物；成功也移除本任务的隔离临时目录壳
-  // （CLI 的 --del-after-done 只清文件，不清 GUI 创建的 task-<id> 目录）
-  if (task.status !== 'completed') {
-    deleteTaskArtifacts(taskId)
-  } else {
-    const tmpDir: string = (task as any).tmpDir || ''
+  // 产物清理策略（集中规则表，避免各终态行为漂移）：
+  // - completed：仅移除 GUI 创建的隔离临时目录壳（CLI 的 --del-after-done 只清文件不清目录）
+  // - cancelled：用户主动停止，内容视为有效 → 保留全部产物，仅补删临时目录壳
+  // - failed + 录制任务：保留 saveDir 中已录制的成品 —— 实时合并的 MKV 异常中断仍可播放，
+  //   这正是录制固定 MKV 封装的核心承诺；只清理分片碎片所在的临时目录
+  // - failed + 普通下载：维持原状，清理全部产物
+  const tmpDir: string = (task as any).tmpDir || ''
+  const isRecordTask = isRecordTaskOptions((task as any).options)
+  const removeTmpShell = () => {
     if (tmpDir && basename(tmpDir) === `task-${taskId}`) {
       removeGuarded(tmpDir, [], [])
     }
   }
+  if (task.status === 'completed' || task.status === 'cancelled' || isRecordTask) {
+    removeTmpShell()
+  } else {
+    deleteTaskArtifacts(taskId)
+  }
+
+  notifyRecordFinished(task)
 
   if (task._speedTimer) {
     clearInterval(task._speedTimer)
@@ -355,14 +390,51 @@ export function interruptOrphanedRuntimeTasks(): void {
   }
 }
 
-export function startDownload(options: DownloadOptions, mainWindow: BrowserWindow | null): string {
+/**
+ * 应用启动时清扫遗留的空隔离临时目录：
+ * - 仅处理基 tmp 目录下名为 task-<uuid> 的一级子目录（与 startDownload 的派生命名严格匹配）
+ * - 只删除完全为空的目录壳；读取失败或仍有任何内容（含隐藏文件）一律保留
+ * 兼容旧版本 cancelled 任务跳过清理产生的空壳残留，防止长期累积。
+ */
+export function sweepOrphanedEmptyTmpDirs(): void {
+  try {
+    const store = getStore()
+    const settings = store.get('settings') as AppSettings
+    const baseTmpDir = (settings.tmpDir || '').trim() || join(dirname(process.execPath), 'tmp')
+    if (!existsSync(baseTmpDir)) return
+
+    // 基目录本身先过安全校验，杜绝异常配置下的误操作面
+    const verdict = isAllowedRecursiveDeleteTarget(baseTmpDir)
+    if (!verdict.ok || !verdict.path) return
+
+    for (const entry of readdirSync(verdict.path, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^task-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.name)) continue
+      const full = join(verdict.path, entry.name)
+      try {
+        if (readdirSync(full).length > 0) continue
+        rmSync(full, { force: true })
+      } catch {
+        // 单个目录清扫失败不影响其余条目
+      }
+    }
+  } catch {
+    // 清扫属尽力而为的维护能力，失败不影响启动流程
+  }
+}
+
+export function startDownload(options: DownloadOptions, mainWindow: BrowserWindow | null): { taskId: string; options: DownloadOptions } {
   activeMainWindow = mainWindow
   const store = getStore()
   const settings = store.get('settings') as AppSettings
   const taskId = randomUUID()
 
-  if (!options.url) {
+  const requestUrl = typeof options.url === 'string' ? options.url.trim() : ''
+  if (!requestUrl) {
     throw new Error('下载地址不能为空')
+  }
+  // 仅接受 http(s)：与 scheduler / 历史记录净化保持同一标准，阻断 file:、ftp: 等协议流入 CLI 参数
+  if (!/^https?:\/\//i.test(requestUrl)) {
+    throw new Error('下载地址必须是 http(s) 链接')
   }
 
   const exePath = settings.exePath
@@ -391,7 +463,8 @@ export function startDownload(options: DownloadOptions, mainWindow: BrowserWindo
   // 每个任务使用独立的临时子目录：并发任务互不干扰，且清理时只删除本任务目录
   const effectiveTmpDir = join(baseTmpDir, `task-${taskId}`)
   const effectiveLogFilePath = options.logFilePath || settings.logFilePath || defaultLogFilePath
-  options = { ...options, saveDir: effectiveSaveDir, tmpDir: effectiveTmpDir, logFilePath: effectiveLogFilePath }
+  // url 一并归一化为 trim 后的值；tmpDir 覆盖为按任务派生的隔离目录
+  options = { ...options, url: requestUrl, saveDir: effectiveSaveDir, tmpDir: effectiveTmpDir, logFilePath: effectiveLogFilePath }
 
   ensureDir(effectiveSaveDir)
   ensureDir(baseTmpDir)
@@ -520,12 +593,41 @@ export function startDownload(options: DownloadOptions, mainWindow: BrowserWindo
     finalizeTask(taskId, null)
   })
 
-  return taskId
+  // 回传主进程解析后的生效参数（含按任务派生的隔离 tmpDir），
+  // 渲染端据此建立任务记录，保证后续删除/重试链路拿到权威路径而非基目录
+  return { taskId, options }
+}
+
+/** 当前处于运行中/等待中的录制任务数（供关闭拦截等使用） */
+export function countActiveRecordTasks(): number {
+  let count = 0
+  for (const task of activeTasks.values()) {
+    if ((task.status === 'running' || task.status === 'pending') && isRecordTaskOptions((task as any).options)) {
+      count += 1
+    }
+  }
+  return count
+}
+
+/**
+ * 取消全部活跃录制任务（应用退出前的收尾路径）。
+ * 先置 cancelled 再杀进程树，保证 close 收尾走"保留产物"路径。
+ */
+export function cancelAllRecordTasks(): void {
+  for (const [id, task] of Array.from(activeTasks.entries())) {
+    if ((task.status === 'running' || task.status === 'pending') && isRecordTaskOptions((task as any).options)) {
+      cancelDownload(id)
+    }
+  }
 }
 
 export function cancelDownload(taskId: string): boolean {
   const task = activeTasks.get(taskId)
   if (!task) return false
+
+  // 幂等保护：已进入取消流程的任务直接返回成功。
+  // 对同一 pid 重复 taskkill 在 Windows 上有 PID 复用误杀无关进程树的风险。
+  if (task.status === 'cancelled') return true
 
   task.status = 'cancelled'
   task.latestLog = task.latestLog || '任务已取消'
