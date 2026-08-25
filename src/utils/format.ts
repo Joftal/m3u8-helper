@@ -9,13 +9,6 @@ export function formatFileSize(bytes: number): string {
 }
 
 /**
- * 格式化下载速度
- */
-export function formatSpeed(speedStr: string): string {
-  return speedStr || '0 KB/s'
-}
-
-/**
  * 格式化持续时间（秒）
  */
 export function formatDuration(seconds: number): string {
@@ -58,14 +51,6 @@ export function extractFileName(url: string): string {
     }
   } catch {}
   return `download_${Date.now()}`
-}
-
-/**
- * 截断字符串
- */
-export function truncate(str: string, maxLength: number): string {
-  if (str.length <= maxLength) return str
-  return str.substring(0, maxLength - 3) + '...'
 }
 
 /**

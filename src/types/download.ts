@@ -113,7 +113,6 @@ export interface DownloadOptions {
   // 直播录制
   livePerformAsVod?: boolean
   liveRealTimeMerge?: boolean
-  liveKeepSegments?: boolean
   livePipeMux?: boolean
   liveFixVttByAudio?: boolean
   liveRecordLimit?: string   // HH:mm:ss
@@ -130,17 +129,6 @@ export interface LogEntry {
   message: string
 }
 
-export interface StreamInfo {
-  type: 'video' | 'audio' | 'subtitle'
-  codec: string
-  resolution?: string
-  bandwidth?: number
-  language?: string
-  channels?: string
-  frameRate?: number
-  selected: boolean
-}
-
 export interface HistoryRecord {
   id: string
   url: string
@@ -151,12 +139,4 @@ export interface HistoryRecord {
   fileSize: number
   outputPath: string
   duration: number
-}
-
-export interface ScheduledTask {
-  id: string
-  url: string
-  cron: string
-  enabled: boolean
-  options: DownloadOptions
 }

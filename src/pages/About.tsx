@@ -1,7 +1,14 @@
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Github, ExternalLink, Heart } from 'lucide-react'
 
 export default function About() {
+  const [version, setVersion] = useState('')
+
+  useEffect(() => {
+    window.api.app.getVersion().then(setVersion).catch(() => {})
+  }, [])
+
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="page-header">
@@ -20,7 +27,7 @@ export default function About() {
         <img src={new URL('../assets/icon.png', import.meta.url).href} alt="m3u8-helper" className="mx-auto mb-5 h-16 w-16 rounded-2xl object-cover shadow-sm" />
 
         <h2 className="mb-1 text-2xl font-bold tracking-tight text-slate-900">m3u8-helper</h2>
-        <p className="mb-6 text-sm text-slate-400">v1.0.0</p>
+        <p className="mb-6 text-sm text-slate-400">{version ? `v${version}` : ''}</p>
 
         <p className="mx-auto mb-8 max-w-md text-sm leading-relaxed text-slate-600">
           基于 N_m3u8DL-RE 的流媒体下载工具箱。支持 HLS/DASH/MSS 流媒体下载，

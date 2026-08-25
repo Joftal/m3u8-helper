@@ -63,6 +63,9 @@ export function validateSettingValue(key: string, value: unknown): { valid: bool
     case 'threadCount':
       return { valid: true, value: validateQueueNumber(normalized, 1, 64, 8) }
 
+    case 'batchConcurrency':
+      return { valid: true, value: validateQueueNumber(normalized, 1, 6, 2) }
+
     case 'downloadRetryCount':
       return { valid: true, value: validateQueueNumber(normalized, 0, 20, 3) }
 
@@ -128,13 +131,11 @@ export function validateSettingValue(key: string, value: unknown): { valid: bool
       return { valid: allowed.includes(normalized.trim()) || normalized.trim() === '', value: normalized.trim(), message: normalized.trim() && !allowed.includes(normalized.trim()) ? '非法的 HLS 加密方法' : undefined }
     }
 
-    case 'theme': {
-      const text = typeof normalized === 'string' ? normalized : ''
-      return { valid: ['dark', 'light'].includes(text.toLowerCase()), value: text.toLowerCase() }
+    case 'customHlsKey':
+    case 'customHlsIv': {
+      if (typeof normalized !== 'string') return { valid: false, value: '', message: '必须为字符串' }
+      return { valid: true, value: normalized.trim().slice(0, 4096) }
     }
-
-    case 'language':
-      return { valid: typeof normalized === 'string', value: normalized }
 
     case 'customRange': {
       if (typeof normalized !== 'string') return { valid: false, value: '', message: '参数必须为字符串' }
@@ -154,21 +155,9 @@ export function validateSettingValue(key: string, value: unknown): { valid: bool
       return { valid: typeof normalized === 'string', value: typeof normalized === 'string' ? normalized : '' }
 
     default:
-      return { valid: true, value: normalized }
+      // 未知配置项一律拒绝：防止任意 key 写入 settings.json
+      return { valid: false, value: undefined, message: '未知配置项' }
   }
-}
-
-export function sanitizeSettings<T extends Record<string, unknown>>(settings: T): T {
-  const next = { ...settings } as T
-
-  for (const [key, value] of Object.entries(settings)) {
-    const result = validateSettingValue(key, value)
-    if (result.valid) {
-      ;(next as Record<string, unknown>)[key] = result.value
-    }
-  }
-
-  return next
 }
 
 export function validateSettings<T extends Record<string, unknown>>(settings: T): { valid: boolean; settings: T; errors: string[] } {
@@ -187,6 +176,11 @@ export function validateSettings<T extends Record<string, unknown>>(settings: T)
   return { valid: errors.length === 0, settings: next, errors }
 }
 
+/** 静默净化：等价于 validateSettings 但不收集错误，非法键保留原值 */
+export function sanitizeSettings<T extends Record<string, unknown>>(settings: T): T {
+  return validateSettings(settings).settings
+}
+
 export function isValidUrl(url: string): boolean {
   try {
     new URL(url)
@@ -194,19 +188,4 @@ export function isValidUrl(url: string): boolean {
   } catch {
     return false
   }
-}
-
-export function isMediaUrl(url: string): boolean {
-  const patterns = [
-    /\.m3u8(\?.*)?$/i,
-    /\.mpd(\?.*)?$/i,
-    /\.ism\/manifest(\?.*)?$/i,
-    /\/manifest(\?.*)?$/i
-  ]
-  return patterns.some((p) => p.test(url))
-}
-
-export function isValidPath(path: string): boolean {
-  if (!path) return false
-  return isValidPathLike(path) || /^[a-zA-Z0-9_./\\-\s]+$/.test(path)
 }

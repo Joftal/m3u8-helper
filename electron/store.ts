@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { join, dirname } from 'path'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import { sanitizeSettings } from '../src/utils/validators'
+import { registerProtectedPath } from './path-safety'
 
 function resolveAppStorageRoot(): string {
   const packagedRoot = app.isPackaged ? dirname(process.execPath) : ''
@@ -42,7 +43,16 @@ function resolveAppStorageRoot(): string {
     }
   }
 
-  return packagedRoot || app.getAppPath()
+  // 所有候选目录均不可写（如 Program Files 安装且未提权）时，
+  // 降级到系统用户数据目录，保证配置仍可持久化而非静默丢失
+  try {
+    const userDataDir = app.getPath('userData')
+    mkdirSync(userDataDir, { recursive: true })
+    console.warn(`[m3u8-helper] 安装目录不可写，配置已降级存储到用户数据目录: ${userDataDir}`)
+    return userDataDir
+  } catch {
+    return packagedRoot || app.getAppPath()
+  }
 }
 
 const rootDir = resolveAppStorageRoot()
@@ -71,6 +81,7 @@ const defaults = {
     maxSpeed: '',
     autoSelect: true,
     subOnly: false,
+    batchConcurrency: 2,
     binaryMerge: false,
     checkSegmentsCount: true,
     useFFmpegConcatDemuxer: false,
@@ -98,8 +109,6 @@ const defaults = {
     customRange: '',
     adKeywords: [] as string[],
     allowHlsMultiExtMap: false,
-    theme: 'light' as 'dark' | 'light',
-    language: 'zh-CN',
     customArgs: ''
   },
   history: [] as any[],
@@ -132,6 +141,13 @@ const categoryFiles: Record<CategoryName, string> = {
 
 let data: StoreSchema
 
+/** 禁止作为对象键写入的危险键名，阻断原型污染 */
+const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function isSafeObjectKey(key: string): boolean {
+  return !UNSAFE_OBJECT_KEYS.has(key)
+}
+
 function ensureAppDataDir(): void {
   if (!existsSync(appDataDir)) {
     mkdirSync(appDataDir, { recursive: true })
@@ -153,7 +169,13 @@ function readCategoryJson<T>(category: CategoryName, fallback: T): T {
     const raw = readFileSync(filePath, 'utf-8')
     const parsed = JSON.parse(raw)
     if (category === 'settings') {
-      return { ...fallback, ...parsed } as T
+      const merged: Record<string, unknown> = { ...(fallback as Record<string, unknown>) }
+      if (parsed && typeof parsed === 'object') {
+        for (const [key, value] of Object.entries(parsed)) {
+          if (isSafeObjectKey(key)) merged[key] = value
+        }
+      }
+      return merged as T
     }
     return parsed as T
   } catch {
@@ -195,13 +217,32 @@ export function resetSettings(excludedKeys: string[] = []): typeof defaultSettin
 }
 
 export function initStore(): void {
+  // 应用数据目录与存储根目录纳入删除保护
+  registerProtectedPath(appDataDir)
+  registerProtectedPath(rootDir)
+
   const loadedSettings = sanitizeSettings(readCategoryJson('settings', JSON.parse(JSON.stringify(defaultSettings))))
+
+  // 清理已废弃的历史配置键
+  const legacyKeys: string[] = ['theme', 'language']
+  let prunedLegacy = false
+  for (const key of legacyKeys) {
+    if (Object.prototype.hasOwnProperty.call(loadedSettings, key)) {
+      delete (loadedSettings as Record<string, unknown>)[key]
+      prunedLegacy = true
+    }
+  }
+
   data = {
     settings: loadedSettings,
     history: readCategoryJson('history', JSON.parse(JSON.stringify(defaults.history))),
     scheduledTasks: readCategoryJson('scheduledTasks', JSON.parse(JSON.stringify(defaults.scheduledTasks))),
     runtimeTasks: readCategoryJson('runtimeTasks', JSON.parse(JSON.stringify(defaults.runtimeTasks))),
     windowState: readCategoryJson('windowState', JSON.parse(JSON.stringify(defaults.windowState)))
+  }
+
+  if (prunedLegacy) {
+    saveCategory('settings')
   }
 
   if (!data.settings.saveDir || !data.settings.saveDir.trim()) {
@@ -232,6 +273,9 @@ function getNestedValue(source: any, keys: string[]): any {
 }
 
 function setNestedValue(source: any, keys: string[], value: any): void {
+  const lastKey = keys[keys.length - 1]
+  if (!keys.every(isSafeObjectKey)) return
+
   let current = source
   for (let i = 0; i < keys.length - 1; i++) {
     const nextKey = keys[i]
@@ -240,7 +284,7 @@ function setNestedValue(source: any, keys: string[], value: any): void {
     }
     current = current[nextKey]
   }
-  current[keys[keys.length - 1]] = value
+  current[lastKey] = value
 }
 
 export function getStore() {

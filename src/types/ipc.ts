@@ -9,15 +9,17 @@ export interface ElectronAPI {
   download: {
     start: (options: any) => Promise<{ success: boolean; taskId?: string; error?: string }>
     cancel: (taskId: string) => Promise<{ success: boolean }>
-    waitForComplete: (taskId: string) => Promise<any>
+    delete: (taskId: string, taskInfo?: any) => Promise<{
+      success: boolean
+      deleted?: string[]
+      skipped?: Array<{ path: string; reason: string }>
+      error?: string
+    }>
     onProgress: (callback: (data: any) => void) => () => void
     onLog: (callback: (data: any) => void) => () => void
     onComplete: (callback: (data: any) => void) => () => void
-    onStreamParsed: (callback: (data: any) => void) => () => void
-    removeAllListeners: () => void
   }
   settings: {
-    get: (key?: string) => Promise<any>
     set: (key: string, value: any) => Promise<{ success: boolean }>
     getAll: () => Promise<any>
     getDefaults: () => Promise<any>
@@ -31,7 +33,7 @@ export interface ElectronAPI {
   }
   runtime: {
     getAll: () => Promise<any[]>
-    clear: () => Promise<{ success: boolean }>
+    remove: (taskId: string) => Promise<{ success: boolean }>
   }
   scheduler: {
     add: (task: any) => Promise<any>
@@ -43,12 +45,6 @@ export interface ElectronAPI {
     openFile: (filters?: any[]) => Promise<string | null>
   }
   app: {
-    getExePath: () => Promise<string>
-    checkToolPaths: () => Promise<{
-      exe: { configured: string; detected: string; exists: boolean; missing: boolean }
-      ffmpeg: { configured: string; detected: string; exists: boolean; missing: boolean }
-      mp4decrypt: { configured: string; detected: string; exists: boolean; missing: boolean }
-    }>
     getVersion: () => Promise<string>
   }
 }

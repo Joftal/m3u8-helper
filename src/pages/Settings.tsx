@@ -1,9 +1,124 @@
-﻿import { useEffect, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Settings, FolderOpen, Cpu, Film, Globe, Save, Zap, Type, Key, Filter, CheckCircle2, AlertTriangle, RotateCcw } from 'lucide-react'
+import { Settings, FolderOpen, Cpu, Film, Globe, Save, Zap, Type, Key, Filter, RotateCcw } from 'lucide-react'
 import { useSettingsStore } from '@/store/settingsStore'
 import Modal from '@/components/Modal'
 import { showToast } from '@/components/Toast'
+import { validateSettingValue } from '@/utils/validators'
+
+interface DraftFieldProps {
+  value: string
+  onCommit: (value: string) => void
+  placeholder?: string
+  className?: string
+  type?: string
+}
+
+/** 草稿式输入：输入过程零校验，失焦或回车时提交；修复受控输入每次击键被 trim/校验导致丢字的问题 */
+function DraftField({ value, onCommit, placeholder, className, type = 'text' }: DraftFieldProps) {
+  const [draft, setDraft] = useState(value)
+  const draftRef = useRef(draft)
+  const valueRef = useRef(value)
+  const commitRef = useRef(onCommit)
+  draftRef.current = draft
+  valueRef.current = value
+  commitRef.current = onCommit
+
+  useEffect(() => {
+    setDraft(value)
+  }, [value])
+
+  // 卸载前提交未保存的草稿，避免输入后未失焦直接离开页面导致内容丢失
+  useEffect(() => {
+    return () => {
+      if (draftRef.current !== valueRef.current) {
+        commitRef.current(draftRef.current)
+      }
+    }
+  }, [])
+
+  return (
+    <input
+      type={type}
+      value={draft}
+      placeholder={placeholder}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        if (draft !== value) onCommit(draft)
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur()
+      }}
+      className={className}
+    />
+  )
+}
+
+function serializeHeaders(headers: Record<string, string> | undefined): string {
+  return JSON.stringify(headers ?? {}, null, 2)
+}
+
+/** 草稿式请求头编辑器：编辑过程完全自由，失焦时校验入库；解析失败红字提示且保留内容 */
+function HeadersEditor({ value, onCommit }: { value: Record<string, string>; onCommit: (next: Record<string, string>) => void }) {
+  const [draft, setDraft] = useState(() => serializeHeaders(value))
+  const [error, setError] = useState('')
+  const draftRef = useRef(draft)
+  const valueRef = useRef(value)
+  const commitRef = useRef(onCommit)
+  draftRef.current = draft
+  valueRef.current = value
+  commitRef.current = onCommit
+
+  useEffect(() => {
+    setDraft(serializeHeaders(value))
+    setError('')
+  }, [value])
+
+  // 卸载前尝试提交合法的未保存 JSON；非法内容不强制入库
+  useEffect(() => {
+    return () => {
+      if (draftRef.current === serializeHeaders(valueRef.current)) return
+      try {
+        const parsed = JSON.parse(draftRef.current)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          commitRef.current(parsed)
+        }
+      } catch {}
+    }
+  }, [])
+
+  return (
+    <div>
+      <textarea
+        value={draft}
+        onChange={(e) => {
+          setDraft(e.target.value)
+          if (error) setError('')
+        }}
+        onBlur={() => {
+          if (draft === serializeHeaders(value)) {
+            setError('')
+            return
+          }
+          try {
+            const parsed = JSON.parse(draft)
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+              setError('必须是 JSON 对象（键值对），尚未保存')
+              return
+            }
+            setError('')
+            onCommit(parsed)
+          } catch {
+            setError('JSON 格式错误，尚未保存')
+          }
+        }}
+        placeholder='{"Cookie": "xxx", "User-Agent": "xxx"}'
+        className="input-field h-20 resize-none font-mono text-xs"
+      />
+      {error && <p className="mt-1 text-[11px] text-red-500">{error}</p>}
+    </div>
+  )
+}
 
 export default function SettingsPage() {
   const { settings, loaded, loadSettings, updateSetting, resetSettings } = useSettingsStore()
@@ -37,11 +152,25 @@ export default function SettingsPage() {
     </motion.section>
   )
 
+  const commitField = (field: keyof typeof settings, value: string) => {
+    const result = validateSettingValue(field as string, value)
+    if (!result.valid) {
+      showToast('error', result.message || '参数值非法')
+      return
+    }
+    updateSetting(field as any, result.value as any)
+  }
+
   const PathField = ({ label, field, placeholder }: any) => (
     <div>
       <label className="mb-1 block text-xs text-slate-500">{label}</label>
       <div className="flex gap-2">
-        <input type="text" value={(settings as any)[field]} onChange={(e) => updateSetting(field, e.target.value)} placeholder={placeholder} className="input-field flex-1 text-sm" />
+        <DraftField
+          value={(settings as any)[field] ?? ''}
+          onCommit={(v) => commitField(field, v)}
+          placeholder={placeholder}
+          className="input-field flex-1 text-sm"
+        />
         <button onClick={() => handleSelectDir(field)} className="btn-secondary px-3"><FolderOpen size={14} /></button>
       </div>
     </div>
@@ -109,7 +238,7 @@ export default function SettingsPage() {
             <PathField label="临时文件目录" field="tmpDir" placeholder="当前目录..." />
             <div className="field-shell">
               <label className="mb-1 block text-xs text-slate-500">保存文件名模板</label>
-              <input type="text" value={settings.savePattern} onChange={(e) => updateSetting('savePattern', e.target.value)} placeholder='<SaveName>_<Resolution>_<Bandwidth>' className="input-field text-sm" />
+              <DraftField value={settings.savePattern} onCommit={(v) => commitField('savePattern', v)} placeholder='<SaveName>_<Resolution>_<Bandwidth>' className="input-field text-sm" />
               <p className="mt-1 text-[11px] text-slate-400">变量: SaveName, Id, Codecs, Language, Resolution, Bandwidth, MediaType, Channels, FrameRate</p>
             </div>
             <PathField label="日志文件路径" field="logFilePath" placeholder="不保存日志文件..." />
@@ -122,18 +251,16 @@ export default function SettingsPage() {
           <div className="space-y-3">
             <div className="field-shell">
               <label className="mb-1 block text-xs text-slate-500">BaseURL</label>
-              <input type="text" value={settings.baseUrl} onChange={(e) => updateSetting('baseUrl', e.target.value)} placeholder="不设置（自动从链接推断）" className="input-field text-sm" />
+              <DraftField value={settings.baseUrl} onCommit={(v) => commitField('baseUrl', v)} placeholder="不设置（自动从链接推断）" className="input-field text-sm" />
               <p className="mt-1 text-[11px] text-slate-400">对应 --base-url，为分片设置基础 URL</p>
             </div>
             <div className="field-shell">
               <label className="mb-1 block text-xs text-slate-500">代理地址</label>
-              <input type="text" value={settings.proxy} onChange={(e) => updateSetting('proxy', e.target.value)} placeholder="http://127.0.0.1:7890" className="input-field text-sm" />
+              <DraftField value={settings.proxy} onCommit={(v) => commitField('proxy', v)} placeholder="http://127.0.0.1:7890" className="input-field text-sm" />
             </div>
             <div className="field-shell">
               <label className="mb-1 block text-xs text-slate-500">自定义请求头（JSON）</label>
-              <textarea value={JSON.stringify(settings.headers, null, 2)}
-                onChange={(e) => { try { updateSetting('headers', JSON.parse(e.target.value)) } catch {} }}
-                placeholder='{"Cookie": "xxx", "User-Agent": "xxx"}' className="input-field h-20 resize-none font-mono text-xs" />
+              <HeadersEditor value={settings.headers} onCommit={(next) => updateSetting('headers', next)} />
             </div>
           </div>
         </Section>
@@ -145,6 +272,10 @@ export default function SettingsPage() {
               <input type="number" value={settings.threadCount} onChange={(e) => updateSetting('threadCount', Number(e.target.value))} min={1} max={64} className="input-field text-sm" />
             </div>
             <div className="field-shell">
+              <label className="mb-1 block text-xs text-slate-500">批量任务并发数</label>
+              <input type="number" value={settings.batchConcurrency} onChange={(e) => updateSetting('batchConcurrency', Number(e.target.value))} min={1} max={6} className="input-field text-sm" />
+            </div>
+            <div className="field-shell">
               <label className="mb-1 block text-xs text-slate-500">下载重试次数</label>
               <input type="number" value={settings.downloadRetryCount} onChange={(e) => updateSetting('downloadRetryCount', Number(e.target.value))} min={0} max={20} className="input-field text-sm" />
             </div>
@@ -154,11 +285,11 @@ export default function SettingsPage() {
             </div>
             <div className="field-shell">
               <label className="mb-1 block text-xs text-slate-500">限速（如 10M, 100K）</label>
-              <input type="text" value={settings.maxSpeed} onChange={(e) => updateSetting('maxSpeed', e.target.value)} placeholder="不限速" className="input-field text-sm" />
+              <DraftField value={settings.maxSpeed} onCommit={(v) => commitField('maxSpeed', v)} placeholder="不限速" className="input-field text-sm" />
             </div>
             <div className="field-shell col-span-2">
               <label className="mb-1 block text-xs text-slate-500">自定义下载范围</label>
-              <input type="text" value={settings.customRange} onChange={(e) => updateSetting('customRange', e.target.value)} placeholder="如 0-100 或 01:00:00-02:00:00" className="input-field text-sm" />
+              <DraftField value={settings.customRange} onCommit={(v) => commitField('customRange', v)} placeholder="如 0-100 或 01:00:00-02:00:00" className="input-field text-sm" />
               <p className="mt-1 text-[11px] text-slate-400">对应 --custom-range</p>
             </div>
             <div className="field-shell col-span-2">
@@ -201,7 +332,7 @@ export default function SettingsPage() {
             <div className="field-shell col-span-2">
               <label className="mb-1 block text-xs text-slate-500">密钥文件路径</label>
               <div className="flex gap-2">
-                <input type="text" value={settings.keyTextFile} onChange={(e) => updateSetting('keyTextFile', e.target.value)} placeholder="无" className="input-field flex-1 text-sm" />
+                <DraftField value={settings.keyTextFile} onCommit={(v) => commitField('keyTextFile', v)} placeholder="无" className="input-field flex-1 text-sm" />
                 <button onClick={() => handleSelectDir('keyTextFile')} className="btn-secondary px-3"><FolderOpen size={14} /></button>
               </div>
             </div>
@@ -247,12 +378,12 @@ export default function SettingsPage() {
             </div>
             <div className="field-shell">
               <label className="mb-1 block text-xs text-slate-500">自定义 HLS 解密 KEY</label>
-              <input type="text" value={settings.customHlsKey} onChange={(e) => updateSetting('customHlsKey', e.target.value)} placeholder="文件路径、HEX 或 Base64" className="input-field text-sm" />
+              <DraftField value={settings.customHlsKey} onCommit={(v) => commitField('customHlsKey', v)} placeholder="文件路径、HEX 或 Base64" className="input-field text-sm" />
               <p className="mt-1 text-[11px] text-slate-400">对应 --custom-hls-key</p>
             </div>
             <div className="field-shell">
               <label className="mb-1 block text-xs text-slate-500">自定义 HLS 解密 IV</label>
-              <input type="text" value={settings.customHlsIv} onChange={(e) => updateSetting('customHlsIv', e.target.value)} placeholder="文件路径、HEX 或 Base64" className="input-field text-sm" />
+              <DraftField value={settings.customHlsIv} onCommit={(v) => commitField('customHlsIv', v)} placeholder="文件路径、HEX 或 Base64" className="input-field text-sm" />
               <p className="mt-1 text-[11px] text-slate-400">对应 --custom-hls-iv</p>
             </div>
           </div>
@@ -311,9 +442,12 @@ export default function SettingsPage() {
 
       <Section icon={<Type size={15} className="text-slate-600" />} color="bg-slate-200 text-slate-700" title="自定义参数" delay={0.18}>
         <div className="field-shell">
-          <input type="text" value={settings.customArgs} onChange={(e) => updateSetting('customArgs', e.target.value)}
+          <DraftField value={settings.customArgs} onCommit={(v) => commitField('customArgs', v)}
             placeholder="额外的命令行参数，会追加到末尾..." className="input-field text-sm" />
           <p className="mt-1 text-[11px] text-slate-400">高级用户可直接输入 N_m3u8DL-RE 支持的任意参数，如 --mux-import、-sv 等</p>
+          <p className="mt-1 text-[11px] text-amber-600">
+            风险提示：此处内容会原样追加到下载命令行，仅输入来源可信的参数；不排除个别参数会影响文件保存位置或清理行为。
+          </p>
         </div>
       </Section>
     </div>

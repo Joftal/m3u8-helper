@@ -7,37 +7,7 @@ import {
   Clock
 } from 'lucide-react'
 import { useDownloadStore } from '@/store/downloadStore'
-
-function formatNetworkSpeed(bytesPerSecond: number): string {
-  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 KB/s'
-
-  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
-  let value = bytesPerSecond
-  let unitIndex = 0
-
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024
-    unitIndex += 1
-  }
-
-  const precision = value >= 10 ? 1 : 2
-  return `${value.toFixed(precision)} ${units[unitIndex]}`
-}
-
-function parseSpeedToBytesPerSecond(raw: string): number {
-  const match = raw.match(/([\d.]+)\s*(B\/s|KB\/s|MB\/s|GB\/s|Bps|KBps|MBps|GBps)/i)
-  if (!match) return 0
-
-  const value = Number(match[1]) || 0
-  const unit = match[2].toLowerCase().replace(/ps$/, '/s')
-  const base: Record<string, number> = {
-    'b/s': 1,
-    'kb/s': 1024,
-    'mb/s': 1024 * 1024,
-    'gb/s': 1024 * 1024 * 1024
-  }
-  return value * (base[unit] ?? 1)
-}
+import { formatNetworkSpeed, parseSpeedToBytesPerSecond } from '@/utils/speed'
 
 const navItems = [
   { path: '/', icon: Home, label: '任务总览' },

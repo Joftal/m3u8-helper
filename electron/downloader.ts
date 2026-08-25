@@ -1,9 +1,12 @@
 import { ChildProcess, spawn } from 'child_process'
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, promises as fsPromises } from 'fs'
 import { BrowserWindow } from 'electron'
 import { basename, dirname, join } from 'path'
 import { getStore } from './store'
+import { isAllowedRecursiveDeleteTarget } from './path-safety'
 import { randomUUID } from 'crypto'
+import type { DownloadOptions } from '../src/types/download'
+import type { AppSettings } from '../src/types/settings'
 
 export interface DownloadTask {
   id: string
@@ -24,6 +27,25 @@ export interface DownloadTask {
 }
 
 const activeTasks = new Map<string, DownloadTask>()
+
+/** 最近一次启动下载时使用的窗口引用，用于取消等无法传入窗口的路径发送事件 */
+let activeMainWindow: BrowserWindow | null = null
+
+/** runtime-tasks.json 落盘节流间隔：高频日志场景合并为每秒最多一次写入 */
+const PERSIST_INTERVAL_MS = 1000
+/** download:progress 事件最小发送间隔（最新值胜出），避免逐行日志触发渲染端重绘风暴 */
+const PROGRESS_SEND_INTERVAL_MS = 200
+/** 主进程单任务内存日志上限：与时长/日志量脱钩，持久化快照仍取最后 200 条 */
+const MAX_TASK_LOG_LINES = 500
+
+let persistTimer: ReturnType<typeof setTimeout> | null = null
+
+function appendTaskLog(task: DownloadTask & Record<string, any>, line: string): void {
+  task.logs.push(line)
+  if (task.logs.length > MAX_TASK_LOG_LINES) {
+    task.logs.splice(0, task.logs.length - MAX_TASK_LOG_LINES)
+  }
+}
 
 function splitCustomArgs(raw: string): string[] {
   if (!raw) return []
@@ -73,8 +95,66 @@ function splitCustomArgs(raw: string): string[] {
   return tokens
 }
 
-export function getActiveTasks(): Map<string, DownloadTask> {
-  return activeTasks
+/**
+ * 任务统一收尾：状态判定 → 通知渲染进程 → 清理产物与定时器 → 移除条目。
+ *
+ * 所有退出路径（正常 close / 进程错误 / 无进程取消）都收敛到这里，
+ * 保证取消和异常场景同样会发出 download:complete，且不残留 speedTimer。
+ */
+function finalizeTask(taskId: string, exitCode: number | null): void {
+  const task = activeTasks.get(taskId) as (DownloadTask & Record<string, any>) | undefined
+  if (!task) return
+
+  if (task.status === 'cancelled') {
+    task.progress = Math.min(100, Math.max(0, task.progress || 0))
+    task.latestLog = task.latestLog || '任务已取消'
+  } else if (exitCode === 0) {
+    task.status = 'completed'
+    task.progress = 100
+    if (task.totalSegments > 0 && task.downloadedSegments === 0) {
+      task.downloadedSegments = task.totalSegments
+    }
+    if ((task.totalBytes || 0) > 0 && (task.downloadedBytes || 0) === 0) {
+      task.downloadedBytes = task.totalBytes
+    }
+  } else {
+    task.status = 'failed'
+    task.latestLog = task.latestLog || `进程异常退出（代码 ${exitCode ?? 'unknown'}）`
+  }
+
+  activeMainWindow?.webContents.send('download:complete', {
+    taskId,
+    status: task.status,
+    code: exitCode,
+    progress: task.progress,
+    speed: task.speed,
+    downloadedSegments: task.downloadedSegments,
+    totalSegments: task.totalSegments,
+    downloadedBytes: task.downloadedBytes,
+    totalBytes: task.totalBytes,
+    etaSeconds: task.etaSeconds,
+    currentFrameRate: task.currentFrameRate,
+    latestLog: task.latestLog
+  })
+
+  // 失败与取消清理全部产物；成功也移除本任务的隔离临时目录壳
+  // （CLI 的 --del-after-done 只清文件，不清 GUI 创建的 task-<id> 目录）
+  if (task.status !== 'completed') {
+    deleteTaskArtifacts(taskId)
+  } else {
+    const tmpDir: string = (task as any).tmpDir || ''
+    if (tmpDir && basename(tmpDir) === `task-${taskId}`) {
+      removeGuarded(tmpDir, [], [])
+    }
+  }
+
+  if (task._speedTimer) {
+    clearInterval(task._speedTimer)
+    task._speedTimer = null
+  }
+  task.process = null
+  activeTasks.delete(taskId)
+  flushRuntimeTasks()
 }
 
 function formatBytesPerSecond(bytesPerSecond: number): string {
@@ -93,20 +173,21 @@ function formatBytesPerSecond(bytesPerSecond: number): string {
   return `${value.toFixed(precision)} ${units[unitIndex]}`
 }
 
-function getDirectorySize(target: string): number {
+/** 异步递归统计目录体积：磁盘扫描在 libuv 线程池执行，不阻塞主进程事件循环 */
+async function getDirectorySizeAsync(target: string): Promise<number> {
   if (!target || !existsSync(target)) return 0
 
   try {
-    const entries = readdirSync(target, { withFileTypes: true })
+    const entries = await fsPromises.readdir(target, { withFileTypes: true })
     let total = 0
 
     for (const entry of entries) {
       const fullPath = join(target, entry.name)
       if (entry.isDirectory()) {
-        total += getDirectorySize(fullPath)
+        total += await getDirectorySizeAsync(fullPath)
       } else if (entry.isFile()) {
         try {
-          total += statSync(fullPath).size
+          total += (await fsPromises.stat(fullPath)).size
         } catch {
           // ignore transient stat failures
         }
@@ -119,24 +200,44 @@ function getDirectorySize(target: string): number {
   }
 }
 
-function getTaskDiskUsage(task: DownloadTask): number {
-  const settings = getStore().get('settings') || {}
-  const candidates = [
-    (task as any).saveDir,
-    (task as any).tmpDir,
-    (task as any).options?.saveDir,
-    (task as any).options?.tmpDir,
-    settings.saveDir,
-    settings.tmpDir
-  ].filter((value): value is string => Boolean(value && value.trim()))
+/**
+ * 统计本任务可归属的磁盘体积：
+ * - 自有临时目录 tmp/task-<taskId> 整体递归（P0 隔离改造后天然按任务划分）
+ * - saveDir 顶层中文件名包含保存名词干的合并产物文件
+ * 并发任务共享同一保存目录时不再互相计入对方增长，速度不再虚高。
+ */
+async function getTaskAttributableBytes(task: DownloadTask & Record<string, any>): Promise<number> {
+  let total = 0
 
-  const uniqueDirs = Array.from(new Set(candidates.map((dir) => dir.trim())))
-  const total = uniqueDirs.reduce((sum, dir) => sum + getDirectorySize(dir), 0)
+  const tmpDir: string = task.tmpDir || task.options?.tmpDir || ''
+  if (tmpDir && tmpDir.trim()) {
+    total += await getDirectorySizeAsync(tmpDir.trim())
+  }
+
+  const saveDir: string = task.saveDir || task.options?.saveDir || ''
+  const saveName: string = task.saveName || task.options?.saveName || ''
+  if (saveDir && saveDir.trim() && saveName) {
+    const stem = basename(saveName)
+    try {
+      const entries = await fsPromises.readdir(saveDir.trim(), { withFileTypes: true })
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.includes(stem)) continue
+        try {
+          total += (await fsPromises.stat(join(saveDir.trim(), entry.name))).size
+        } catch {
+          // ignore transient stat failures
+        }
+      }
+    } catch {
+      // ignore transient readdir failures
+    }
+  }
+
   return total
 }
 
-function persistRuntimeTasks(): void {
-  const tasks = Array.from(activeTasks.values()).map((task) => ({
+function buildRuntimeSnapshot() {
+  return Array.from(activeTasks.values()).map((task) => ({
     id: task.id,
     url: task.url,
     status: task.status,
@@ -155,17 +256,75 @@ function persistRuntimeTasks(): void {
     saveDir: (task as any).saveDir ?? '',
     options: (task as any).options ?? {}
   }))
-  getStore().set('runtimeTasks', tasks)
 }
 
-function persistSettingsState(settings: any): void {
-  getStore().set('settings', settings)
+/** 立即落盘并撤销挂起的节流定时器。用于任务启动/终结等生命周期边界，保证崩溃安全 */
+function flushRuntimeTasks(): void {
+  if (persistTimer) {
+    clearTimeout(persistTimer)
+    persistTimer = null
+  }
+  getStore().set('runtimeTasks', buildRuntimeSnapshot())
 }
 
-export function startDownload(options: any, mainWindow: BrowserWindow | null): string {
+/** 常规持久化入口（日志行、测速 tick）：尾沿节流为每秒最多一次写入 */
+function persistRuntimeTasks(): void {
+  if (persistTimer) return
+  persistTimer = setTimeout(() => {
+    persistTimer = null
+    flushRuntimeTasks()
+  }, PERSIST_INTERVAL_MS)
+}
+
+/** 向渲染进程发送任务进度快照 */
+function sendProgressEvent(taskId: string, task: DownloadTask, mainWindow: BrowserWindow | null): void {
+  mainWindow?.webContents.send('download:progress', {
+    taskId,
+    progress: task.progress,
+    speed: task.speed,
+    downloadedSegments: task.downloadedSegments,
+    totalSegments: task.totalSegments,
+    downloadedBytes: task.downloadedBytes,
+    totalBytes: task.totalBytes,
+    etaSeconds: task.etaSeconds,
+    currentFrameRate: task.currentFrameRate,
+    latestLog: task.latestLog,
+    status: task.status
+  })
+}
+
+/**
+ * 应用启动时调用：上次退出时仍处于运行中的任务进程已随应用结束，
+ * 将其标记为失败并注明原因，避免前端出现永远"进行中"的僵尸任务。
+ */
+export function interruptOrphanedRuntimeTasks(): void {
   const store = getStore()
-  const settings = store.get('settings')
+  const tasks = store.get('runtimeTasks')
+  if (!Array.isArray(tasks)) return
+
+  let changed = false
+  for (const task of tasks) {
+    if (task && (task.status === 'running' || task.status === 'pending')) {
+      task.status = 'failed'
+      task.latestLog = '应用重启导致下载中断，可重试继续'
+      changed = true
+    }
+  }
+
+  if (changed) {
+    store.set('runtimeTasks', tasks)
+  }
+}
+
+export function startDownload(options: DownloadOptions, mainWindow: BrowserWindow | null): string {
+  activeMainWindow = mainWindow
+  const store = getStore()
+  const settings = store.get('settings') as AppSettings
   const taskId = randomUUID()
+
+  if (!options.url) {
+    throw new Error('下载地址不能为空')
+  }
 
   const exePath = settings.exePath
   if (!exePath) {
@@ -185,35 +344,33 @@ export function startDownload(options: any, mainWindow: BrowserWindow | null): s
   const executableRoot = dirname(process.execPath)
   const defaultSaveDir = join(executableRoot, 'downloads')
   const defaultTmpDir = join(executableRoot, 'tmp')
-  const effectiveSaveDir = options.saveDir || settings.saveDir || defaultSaveDir
-  const effectiveTmpDir = options.tmpDir || settings.tmpDir || defaultTmpDir
+  const defaultLogFilePath = join(executableRoot, 'logs', 'N_m3u8DL-RE.log')
 
-  if (!settings.saveDir || !settings.saveDir.trim()) {
-    settings.saveDir = effectiveSaveDir
-  }
-  if (!settings.tmpDir || !settings.tmpDir.trim()) {
-    settings.tmpDir = effectiveTmpDir
-  }
-  if (!settings.logFilePath || !settings.logFilePath.trim()) {
-    settings.logFilePath = join(executableRoot, 'logs', 'N_m3u8DL-RE.log')
-  }
-  persistSettingsState(settings)
+  // 目录解析仅在本任务内生效，不回写全局设置，避免单次任务参数污染全局配置
+  const effectiveSaveDir = options.saveDir || settings.saveDir || defaultSaveDir
+  const baseTmpDir = options.tmpDir || settings.tmpDir || defaultTmpDir
+  // 每个任务使用独立的临时子目录：并发任务互不干扰，且清理时只删除本任务目录
+  const effectiveTmpDir = join(baseTmpDir, `task-${taskId}`)
+  const effectiveLogFilePath = options.logFilePath || settings.logFilePath || defaultLogFilePath
+  options = { ...options, saveDir: effectiveSaveDir, tmpDir: effectiveTmpDir, logFilePath: effectiveLogFilePath }
 
   ensureDir(effectiveSaveDir)
+  ensureDir(baseTmpDir)
   ensureDir(effectiveTmpDir)
-  if (settings.logFilePath) {
-    const parent = settings.logFilePath.split(/[/\\]/).slice(0, -1).join('/') || '.'
+  if (effectiveLogFilePath) {
+    const parent = effectiveLogFilePath.split(/[/\\]/).slice(0, -1).join('/') || '.'
     ensureDir(parent)
   }
 
   // 构建命令行参数
   const args = buildArgs(options, settings)
 
-  const task: DownloadTask & { saveName?: string; saveDir?: string; options?: any } = {
+  const task: DownloadTask & { saveName?: string; saveDir?: string; tmpDir?: string; options?: any } = {
     id: taskId,
     url: options.url,
     saveName: options.saveName || '',
-    saveDir: options.saveDir || settings.saveDir || effectiveSaveDir,
+    saveDir: effectiveSaveDir,
+    tmpDir: effectiveTmpDir,
     process: null,
     status: 'pending',
     progress: 0,
@@ -231,7 +388,7 @@ export function startDownload(options: any, mainWindow: BrowserWindow | null): s
   }
 
   activeTasks.set(taskId, task)
-  persistRuntimeTasks()
+  flushRuntimeTasks()
 
   // 启动子进程
   const child = spawn(exePath, args, {
@@ -241,38 +398,35 @@ export function startDownload(options: any, mainWindow: BrowserWindow | null): s
 
   task.process = child
   task.status = 'running'
-  ;(task as any)._lastSpeedBytes = getTaskDiskUsage(task)
-  ;(task as any)._lastSpeedAt = Date.now()
 
-  const speedTimer = setInterval(() => {
-    const activeTask = activeTasks.get(taskId)
+  const speedTimer = setInterval(async () => {
+    const activeTask = activeTasks.get(taskId) as (DownloadTask & Record<string, any>) | undefined
     if (!activeTask || activeTask.status !== 'running') return
+    if (activeTask._measuring) return
+    activeTask._measuring = true
 
-    const currentBytes = getTaskDiskUsage(activeTask)
-    const now = Date.now()
-    const elapsedSeconds = Math.max((now - ((activeTask as any)._lastSpeedAt ?? now)) / 1000, 1)
-    const deltaBytes = Math.max(currentBytes - ((activeTask as any)._lastSpeedBytes ?? currentBytes), 0)
-    const bytesPerSecond = deltaBytes / elapsedSeconds
+    try {
+      const currentBytes = await getTaskAttributableBytes(activeTask)
+      // 测量期间任务可能已结束
+      const latest = activeTasks.get(taskId) as (DownloadTask & Record<string, any>) | undefined
+      if (!latest || latest.status !== 'running') return
 
-    activeTask.speed = formatBytesPerSecond(bytesPerSecond)
-    activeTask.downloadedBytes = Math.max(activeTask.downloadedBytes, currentBytes)
-    ;(activeTask as any)._lastSpeedBytes = currentBytes
-    ;(activeTask as any)._lastSpeedAt = now
+      const now = Date.now()
+      const elapsedSeconds = Math.max((now - ((latest as any)._lastSpeedAt ?? now)) / 1000, 1)
+      const deltaBytes = Math.max(currentBytes - ((latest as any)._lastSpeedBytes ?? currentBytes), 0)
+      const bytesPerSecond = deltaBytes / elapsedSeconds
 
-    mainWindow?.webContents.send('download:progress', {
-      taskId,
-      progress: activeTask.progress,
-      speed: activeTask.speed,
-      downloadedSegments: activeTask.downloadedSegments,
-      totalSegments: activeTask.totalSegments,
-      downloadedBytes: activeTask.downloadedBytes,
-      totalBytes: activeTask.totalBytes,
-      etaSeconds: activeTask.etaSeconds,
-      currentFrameRate: activeTask.currentFrameRate,
-      latestLog: activeTask.latestLog,
-      status: activeTask.status
-    })
-    persistRuntimeTasks()
+      latest.speed = formatBytesPerSecond(bytesPerSecond)
+      latest.downloadedBytes = Math.max(latest.downloadedBytes, currentBytes)
+      latest._lastSpeedBytes = currentBytes
+      latest._lastSpeedAt = now
+
+      sendProgressEvent(taskId, latest, mainWindow)
+      persistRuntimeTasks()
+    } finally {
+      const ref = activeTasks.get(taskId) as (DownloadTask & Record<string, any>) | undefined
+      if (ref) ref._measuring = false
+    }
   }, 1000)
   ;(task as any)._speedTimer = speedTimer
 
@@ -304,71 +458,27 @@ export function startDownload(options: any, mainWindow: BrowserWindow | null): s
     }
   })
 
-  // 任务完成
+  // 任务结束（正常退出或被终止）：统一收尾
   child.on('close', (code) => {
-    const task = activeTasks.get(taskId)
-    if (!task) return
-
-    if (task.status === 'cancelled') {
-      task.progress = Math.min(100, Math.max(0, task.progress || 0))
-      task.latestLog = task.latestLog || '任务已取消'
-    } else if (code === 0) {
-      task.status = 'completed'
-      task.progress = 100
-      if (task.totalSegments > 0 && task.downloadedSegments === 0) {
-        task.downloadedSegments = task.totalSegments
-      }
-      if (task.totalBytes > 0 && task.downloadedBytes === 0) {
-        task.downloadedBytes = task.totalBytes
-      }
-    } else {
-      task.status = 'failed'
-      const taskPayload = {
-        saveDir: (task as any).saveDir || (task as any).options?.saveDir || '',
-        saveName: (task as any).saveName || (task as any).options?.saveName || '',
-        tmpDir: (task as any).tmpDir || (task as any).options?.tmpDir || '',
-        outputPath: (task as any).outputPath || (task as any).options?.outputPath || '',
-        options: (task as any).options || {}
-      }
-      deleteTaskArtifacts(taskId, taskPayload)
-    }
-
-    mainWindow?.webContents.send('download:complete', {
-      taskId,
-      status: task.status,
-      code,
-      progress: task.progress,
-      speed: task.speed,
-      downloadedSegments: task.downloadedSegments,
-      totalSegments: task.totalSegments,
-      downloadedBytes: task.downloadedBytes,
-      totalBytes: task.totalBytes,
-      etaSeconds: task.etaSeconds,
-      currentFrameRate: task.currentFrameRate,
-      latestLog: task.latestLog
-    })
-
-    // 清理
-    if ((task as any)._speedTimer) {
-      clearInterval((task as any)._speedTimer)
-    }
-    task.process = null
-    activeTasks.delete(taskId)
-    persistRuntimeTasks()
+    finalizeTask(taskId, code)
   })
 
   child.on('error', (err) => {
     const task = activeTasks.get(taskId)
-    if (task) {
+    if (task && task.status !== 'cancelled') {
       task.status = 'failed'
-      task.logs.push(`[ERROR] ${err.message}`)
-      persistRuntimeTasks()
+      task.latestLog = `[ERROR] ${err.message}`
     }
-    mainWindow?.webContents.send('download:log', {
+    if (task) {
+      appendTaskLog(task, `[ERROR] ${err.message}`)
+    }
+    activeMainWindow?.webContents.send('download:log', {
       taskId,
       level: 'ERROR',
       message: err.message
     })
+    // 进程未能启动时不会触发 close，这里直接统一收尾，避免 speedTimer 泄漏
+    finalizeTask(taskId, null)
   })
 
   return taskId
@@ -380,81 +490,177 @@ export function cancelDownload(taskId: string): boolean {
 
   task.status = 'cancelled'
   task.latestLog = task.latestLog || '任务已取消'
-  persistRuntimeTasks()
 
   if (task.process) {
     task.process.kill('SIGTERM')
 
-    // Windows 上强制杀死
+    // Windows 上强制杀死；随后 close 事件触发 finalizeTask 统一收尾
+    // （发送 cancelled 完成事件、清理产物与定时器）
     if (task.process.pid) {
       try {
         spawn('taskkill', ['/pid', String(task.process.pid), '/T', '/F'])
       } catch {}
     }
+  } else {
+    // 进程不存在（如尚未成功启动）：直接收尾
+    finalizeTask(taskId, null)
   }
-
-  const taskPayload = {
-    saveDir: (task as any).saveDir || (task as any).options?.saveDir || '',
-    saveName: (task as any).saveName || (task as any).options?.saveName || '',
-    tmpDir: (task as any).tmpDir || (task as any).options?.tmpDir || '',
-    outputPath: (task as any).outputPath || (task as any).options?.outputPath || '',
-    options: (task as any).options || {}
-  }
-
-  deleteTaskArtifacts(taskId, taskPayload)
 
   return true
 }
 
-export function deleteTaskArtifacts(taskId: string, taskInfo: any = {}): { success: boolean; deleted: string[]; error?: string } {
-  const task = activeTasks.get(taskId)
-  const payload = task ? { ...task, ...(taskInfo || {}) } : (taskInfo || {})
-  const deleted: string[] = []
+const ARTIFACT_SUFFIXES = [
+  '.part', '.tmp', '.download', '.m3u8', '.meta.json', '.json',
+  '.ts', '.mp4', '.mkv', '.mp3', '.aac'
+]
 
-  const deleteIfExists = (target?: string) => {
-    if (!target || !target.trim()) return
-    const normalized = target.trim()
-    if (!existsSync(normalized)) return
-    rmSync(normalized, { recursive: true, force: true })
-    deleted.push(normalized)
+interface DeleteOutcome {
+  success: boolean
+  deleted: string[]
+  skipped: Array<{ path: string; reason: string }>
+}
+
+/** 受安全校验约束的递归删除：任何未通过校验的路径都会被记入 skipped 而不是删除 */
+function removeGuarded(target: unknown, deleted: string[], skipped: DeleteOutcome['skipped']): void {
+  const verdict = isAllowedRecursiveDeleteTarget(target)
+  if (!verdict.ok || !verdict.path) {
+    skipped.push({ path: String(target ?? ''), reason: verdict.reason || '路径校验未通过' })
+    return
+  }
+  if (!existsSync(verdict.path)) return
+
+  try {
+    rmSync(verdict.path, { recursive: true, force: true })
+    deleted.push(verdict.path)
+  } catch (err) {
+    skipped.push({ path: verdict.path, reason: `删除失败: ${(err as Error).message}` })
+  }
+}
+
+/** 共享临时目录的保守清理：仅移除文件名包含任务名的条目，绝不整体删除目录本身 */
+function cleanupSharedTmpDir(tmpDir: string, stem: string, deleted: string[], skipped: DeleteOutcome['skipped']): void {
+  const verdict = isAllowedRecursiveDeleteTarget(tmpDir)
+  if (!verdict.ok || !verdict.path) {
+    skipped.push({ path: String(tmpDir ?? ''), reason: verdict.reason || '路径校验未通过' })
+    return
   }
 
-  const deleteExactCandidates = (directory: string, fileNames: string[]) => {
-    if (!directory || !fileNames.length) return
-    for (const fileName of fileNames) {
-      const candidate = join(directory, fileName)
-      deleteIfExists(candidate)
+  const dir = verdict.path
+  if (!existsSync(dir)) return
+
+  let entries: Array<{ name: string; isDirectory: () => boolean }>
+  try {
+    entries = readdirSync(dir, { withFileTypes: true }) as any
+  } catch {
+    return
+  }
+
+  for (const entry of entries) {
+    if (!stem || !entry.name.includes(stem)) continue
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      removeGuarded(full, deleted, skipped)
+    } else {
+      try {
+        rmSync(full, { force: true })
+        deleted.push(full)
+      } catch {
+        skipped.push({ path: full, reason: '删除失败' })
+      }
     }
   }
+}
 
-  const saveDir = (payload.saveDir || payload.options?.saveDir || '').trim()
-  const saveName = (payload.saveName || payload.options?.saveName || '').trim()
-  const tmpDir = (payload.tmpDir || payload.options?.tmpDir || '').trim()
-  const outputPath = (payload.outputPath || payload.options?.outputPath || '').trim()
+/**
+ * 删除任务产物。
+ *
+ * 安全策略：
+ * - 活跃任务记录中的 saveDir/saveName/tmpDir/outputPath 为权威数据，
+ *   渲染进程传入的 taskInfo 仅在缺失时兜底，且只接受白名单字段
+ * - 所有整目录递归删除必须通过 path-safety 校验
+ * - 新任务的 tmpDir 是 <base>/task-<taskId> 隔离目录，可整体删除；
+ *   历史共享 tmpDir 只做按名称匹配的保守清理，绝不整体删除
+ */
+export function deleteTaskArtifacts(taskId: string, taskInfo: any = {}): DeleteOutcome {
+  const task = activeTasks.get(taskId) as (DownloadTask & Record<string, any>) | undefined
+  const info = sanitizeTaskInfo(taskInfo)
+  const opts: Record<string, any> = (task?.options ?? info.options ?? {}) as Record<string, any>
 
-  if (outputPath) deleteIfExists(outputPath)
-  if (tmpDir) deleteIfExists(tmpDir)
+  const firstString = (...values: unknown[]): string => {
+    for (const value of values) {
+      if (typeof value === 'string' && value.trim()) return value.trim()
+    }
+    return ''
+  }
+
+  const saveDir = firstString(task?.saveDir, info.saveDir as string, opts.saveDir)
+  const saveName = firstString(task?.saveName, info.saveName as string, opts.saveName)
+  const tmpDir = firstString(task?.tmpDir, info.tmpDir as string, opts.tmpDir)
+  const outputPath = firstString(task?.outputPath, info.outputPath as string, opts.outputPath)
+
+  const deleted: string[] = []
+  const skipped: DeleteOutcome['skipped'] = []
+
+  if (outputPath) {
+    removeGuarded(outputPath, deleted, skipped)
+  }
+
+  if (tmpDir) {
+    if (basename(tmpDir) === `task-${taskId}`) {
+      removeGuarded(tmpDir, deleted, skipped)
+    } else {
+      cleanupSharedTmpDir(tmpDir, basename(saveName), deleted, skipped)
+    }
+  }
 
   if (saveDir && saveName) {
     const baseName = basename(saveName)
     if (baseName && baseName !== '.' && baseName !== '..') {
       const stem = baseName.includes('.') ? baseName.slice(0, baseName.lastIndexOf('.')) : baseName
-      const suffixes = ['.part', '.tmp', '.download', '.m3u8', '.meta.json', '.json', '.ts', '.mp4', '.mkv', '.mp3', '.aac']
       const exactCandidates = new Set<string>([baseName])
-      for (const suffix of suffixes) {
+      for (const suffix of ARTIFACT_SUFFIXES) {
         exactCandidates.add(`${stem}${suffix}`)
         exactCandidates.add(`${baseName}${suffix}`)
       }
-      deleteExactCandidates(saveDir, Array.from(exactCandidates))
+      for (const fileName of exactCandidates) {
+        const candidate = join(saveDir, fileName)
+        if (!candidate.startsWith(saveDir)) continue
+        if (!existsSync(candidate)) continue
+        try {
+          rmSync(candidate, { force: true })
+          deleted.push(candidate)
+        } catch {
+          skipped.push({ path: candidate, reason: '删除失败' })
+        }
+      }
     }
   }
 
   if (task) {
     activeTasks.delete(taskId)
-    persistRuntimeTasks()
+    flushRuntimeTasks()
   }
 
-  return { success: true, deleted }
+  return { success: true, deleted, skipped }
+}
+
+/** 渲染进程传入的任务信息只允许携带白名单字段 */
+export function sanitizeTaskInfo(raw: unknown): Record<string, unknown> {
+  if (!raw || typeof raw !== 'object') return {}
+
+  const out: Record<string, unknown> = {}
+  const stringKeys = ['saveDir', 'saveName', 'tmpDir', 'outputPath'] as const
+  for (const key of stringKeys) {
+    const value = (raw as Record<string, unknown>)[key]
+    if (typeof value === 'string' && value.trim()) {
+      out[key] = value.trim()
+    }
+  }
+  const options = (raw as Record<string, unknown>).options
+  if (options && typeof options === 'object') {
+    out.options = options
+  }
+  return out
 }
 
 /**
@@ -478,7 +684,7 @@ export function deleteTaskArtifacts(taskId: string, taskInfo: any = {}): { succe
  *   -sv OPTIONS, -sa OPTIONS, -ss OPTIONS, -dv OPTIONS, -da OPTIONS, -ds OPTIONS,
  *   -M OPTIONS, --mux-import OPTIONS
  */
-function buildArgs(options: any, settings: any): string[] {
+function buildArgs(options: DownloadOptions, settings: AppSettings): string[] {
   const args: string[] = []
 
   // ========== 输入 URL（必须是第一个参数） ==========
@@ -808,20 +1014,11 @@ function parseSizeValue(raw: string): number {
   return Math.round(value * (sizes[unit] || 1))
 }
 
-function formatSpeedFromBytesPerSecond(bytesPerSecond: number): string {
-  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 KB/s'
-
-  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
-  let value = bytesPerSecond
-  let unitIndex = 0
-
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024
-    unitIndex += 1
-  }
-
-  const precision = value >= 10 ? 1 : 2
-  return `${value.toFixed(precision)} ${units[unitIndex]}`
+/** 进度单调推进：数值只增不减，避免日志噪声导致进度回退 */
+function advanceProgress(current: number, next: unknown): number {
+  const value = Number(next)
+  if (!Number.isFinite(value)) return current
+  return Math.min(100, Math.max(current, value))
 }
 
 function parseOutput(taskId: string, line: string, mainWindow: BrowserWindow | null): void {
@@ -831,7 +1028,7 @@ function parseOutput(taskId: string, line: string, mainWindow: BrowserWindow | n
   const clean = line.replace(/\x1b\[[0-9;]*m/g, '').replace(/\r/g, '').trim()
   if (!clean) return
 
-  task.logs.push(clean)
+  appendTaskLog(task, clean)
   task.latestLog = clean
 
   let level = 'INFO'
@@ -850,39 +1047,45 @@ function parseOutput(taskId: string, line: string, mainWindow: BrowserWindow | n
     task.totalSegments = Math.max(task.totalSegments, Number(segmentSummaryMatch[1]) || 0)
   }
 
-  const segMatch = clean.match(/(?:download(?:ing)?|分片|片段|segments?)\D*(\d+)\D*(?:\/|of)\D*(\d+)/i) ||
-    clean.match(/(\d+)\s*(?:\/|of)\s*(\d+)\s*(?:segments?|分片|片段)/i) ||
-    clean.match(/(\d+)\s*\/\s*(\d+)\s*(?:\.|\s|\||$)/)
+  // 分片进度：必须携带明确关键词上下文，避免把日期、IP 等误判为进度
+  const segMatch =
+    clean.match(/(?:download(?:ing)?|分片|片段|segments?)\D*(\d+)\D*(?:\/|of)\D*(\d+)/i) ||
+    clean.match(/(\d+)\s*(?:\/|of)\s*(\d+)\s*(?:segments?|分片|片段)/i)
   if (segMatch) {
-    task.downloadedSegments = Math.max(0, Number(segMatch[1]) || 0)
-    task.totalSegments = Math.max(0, Number(segMatch[2]) || 0)
-    if (task.totalSegments > 0) {
-      task.progress = Math.min(100, Math.round((task.downloadedSegments / task.totalSegments) * 100))
+    const done = Number(segMatch[1]) || 0
+    const total = Number(segMatch[2]) || 0
+    task.totalSegments = Math.max(task.totalSegments, total)
+    if (done >= 0 && done <= task.totalSegments) {
+      task.downloadedSegments = Math.max(task.downloadedSegments, done)
+      if (task.totalSegments > 0) {
+        task.progress = advanceProgress(task.progress, (done / task.totalSegments) * 100)
+      }
     }
   }
 
   const pctMatch = clean.match(/(\d+(?:\.\d+)?)\s*%/)
   if (pctMatch) {
-    task.progress = Math.min(100, Number(pctMatch[1]) || task.progress)
+    task.progress = advanceProgress(task.progress, pctMatch[1])
   }
 
+  // 字节估算仅在分片信息未知时参与计算，且不回退已有进度
   const bytesMatch = clean.match(/(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB|Bytes?)\s*(?:\/|of|总计|共)\s*(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB|Bytes?)/i) ||
     clean.match(/(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB|Bytes?)\s*(?:已下载|已完成|downloaded|download)/i)
   if (bytesMatch) {
     const current = parseSizeValue(`${bytesMatch[1]} ${bytesMatch[2]}`)
     task.downloadedBytes = Math.max(task.downloadedBytes, current)
     if (bytesMatch[3] && bytesMatch[4]) {
-      task.totalBytes = Math.max(0, parseSizeValue(`${bytesMatch[3]} ${bytesMatch[4]}`))
+      task.totalBytes = Math.max(task.totalBytes, parseSizeValue(`${bytesMatch[3]} ${bytesMatch[4]}`))
     }
-    if (task.totalBytes > 0) {
-      task.progress = Math.min(100, Math.round((task.downloadedBytes / task.totalBytes) * 100))
+    if (task.totalSegments === 0 && task.totalBytes > 0) {
+      task.progress = advanceProgress(task.progress, (task.downloadedBytes / task.totalBytes) * 100)
     }
   }
 
   const speedMatch = clean.match(/(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB)ps/i)
   if (speedMatch) {
     const bytesPerSecond = parseSizeValue(`${speedMatch[1]} ${speedMatch[2]}`)
-    task.speed = formatSpeedFromBytesPerSecond(bytesPerSecond)
+    task.speed = formatBytesPerSecond(bytesPerSecond)
   }
 
   const etaMatch = clean.match(/(?:ETA|剩余时间|预计剩余|剩余)\s*[:=]?\s*(\d{1,2}:\d{2}:\d{2}|\d{1,2}:\d{2})/i)
@@ -905,19 +1108,13 @@ function parseOutput(taskId: string, line: string, mainWindow: BrowserWindow | n
     task.downloadedBytes = task.totalBytes
   }
 
-  mainWindow?.webContents.send('download:progress', {
-    taskId,
-    progress: task.progress,
-    speed: task.speed,
-    downloadedSegments: task.downloadedSegments,
-    totalSegments: task.totalSegments,
-    downloadedBytes: task.downloadedBytes,
-    totalBytes: task.totalBytes,
-    etaSeconds: task.etaSeconds,
-    currentFrameRate: task.currentFrameRate,
-    latestLog: task.latestLog,
-    status: task.status
-  })
+  // 进度事件按最小间隔合并发送（最新值胜出），避免逐行日志触发渲染端重绘风暴；
+  // 终态由 download:complete 携带，speedTimer 每秒兜底一次
+  const now = Date.now()
+  if (now - ((task as any)._lastProgressSentAt ?? 0) >= PROGRESS_SEND_INTERVAL_MS) {
+    ;(task as any)._lastProgressSentAt = now
+    sendProgressEvent(taskId, task, mainWindow)
+  }
 
   persistRuntimeTasks()
 }

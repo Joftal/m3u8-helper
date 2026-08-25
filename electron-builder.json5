@@ -7,7 +7,19 @@
     "output": "dist"
   },
   "files": [
-    "out/**/*"
+    "out/**/*",
+    "resources/**/*"
+  ],
+  // 命令行工具按需携带：仓库根目录存在对应 exe 时才会打入 resources/bin，缺失则跳过
+  "extraResources": [
+    {
+      "from": ".",
+      "to": "bin",
+      "filter": [
+        "N_m3u8DL-RE.exe",
+        "ffmpeg.exe"
+      ]
+    }
   ],
   "win": {
     "target": [
@@ -20,7 +32,7 @@
         "arch": ["x64"]
       }
     ],
-    "icon": "resources/icon.png",
+    "icon": "resources/icon.ico",
     "sign": false,
     "signAndEditExecutable": false
   },

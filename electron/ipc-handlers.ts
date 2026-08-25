@@ -1,16 +1,46 @@
-import { BrowserWindow, dialog, ipcMain, app } from 'electron'
-import { existsSync } from 'fs'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { getDefaultSettings, getStore, resetSettings } from './store'
-import { startDownload, cancelDownload, getActiveTasks, deleteTaskArtifacts } from './downloader'
+import { startDownload, cancelDownload, deleteTaskArtifacts, sanitizeTaskInfo } from './downloader'
 import { addScheduledTask, removeScheduledTask, getScheduledTasks } from './scheduler'
-import { delimiter, dirname, join } from 'path'
 import { validateSettingValue } from '../src/utils/validators'
+import type { HistoryRecord, DownloadOptions } from '../src/types/download'
+
+/** 渲染进程提交的历史记录白名单净化：字段类型收敛 + 字符串截断 */
+function sanitizeHistoryRecord(raw: unknown): HistoryRecord | null {
+  if (!raw || typeof raw !== 'object') return null
+
+  const input = raw as Record<string, unknown>
+  const id = typeof input.id === 'string' ? input.id.trim().slice(0, 64) : ''
+  const url = typeof input.url === 'string' ? input.url.trim().slice(0, 4096) : ''
+  if (!id || !/^https?:\/\//i.test(url)) return null
+
+  const asString = (value: unknown, max: number): string =>
+    typeof value === 'string' ? value.slice(0, max) : ''
+  const asNumber = (value: unknown): number =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0
+
+  const status = ['completed', 'failed', 'cancelled'].includes(input.status as string)
+    ? (input.status as HistoryRecord['status'])
+    : 'failed'
+
+  return {
+    id,
+    url,
+    saveName: asString(input.saveName, 512),
+    status,
+    startTime: asString(input.startTime, 64),
+    endTime: asString(input.endTime, 64),
+    fileSize: asNumber(input.fileSize),
+    outputPath: asString(input.outputPath, 1024),
+    duration: asNumber(input.duration)
+  }
+}
 
 export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
   // ========== 下载 ==========
   ipcMain.handle('download:start', async (_, options) => {
     try {
-      const taskId = startDownload(options, mainWindow)
+      const taskId = startDownload(options as DownloadOptions, mainWindow)
       return { success: true, taskId }
     } catch (error: any) {
       return { success: false, error: error.message }
@@ -24,29 +54,32 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
 
   ipcMain.handle('download:delete', async (_, taskId, taskInfo) => {
     try {
-      const result = deleteTaskArtifacts(taskId, taskInfo)
+      const result = deleteTaskArtifacts(String(taskId ?? ''), sanitizeTaskInfo(taskInfo))
       return result
     } catch (error: any) {
-      return { success: false, deleted: [], error: error.message }
+      return { success: false, deleted: [], skipped: [], error: error.message }
     }
   })
 
   // ========== 设置 ==========
-  ipcMain.handle('settings:get', async (_, key) => {
-    const store = getStore()
-    if (key) {
-      return store.get(`settings.${key}` as any)
-    }
-    return store.get('settings')
-  })
-
   ipcMain.handle('settings:set', async (_, key, value) => {
-    const store = getStore()
-    const validation = validateSettingValue(String(key), value)
+    const normalizedKey = String(key ?? '')
+
+    // 白名单校验：仅允许已知配置项，且不支持嵌套 key
+    if (normalizedKey.includes('.')) {
+      return { success: false, error: '不支持嵌套配置项' }
+    }
+    const knownKeys = getDefaultSettings() as Record<string, unknown>
+    if (!Object.prototype.hasOwnProperty.call(knownKeys, normalizedKey)) {
+      return { success: false, error: '未知配置项' }
+    }
+
+    const validation = validateSettingValue(normalizedKey, value)
     if (!validation.valid) {
       return { success: false, error: validation.message || '参数值非法' }
     }
-    store.set(`settings.${key}` as any, validation.value)
+    const store = getStore()
+    store.set(`settings.${normalizedKey}` as any, validation.value)
     return { success: true }
   })
 
@@ -71,9 +104,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
   })
 
   ipcMain.handle('history:add', async (_, record) => {
+    const sanitized = sanitizeHistoryRecord(record)
+    if (!sanitized) {
+      return { success: false, error: '历史记录字段非法' }
+    }
     const store = getStore()
     const history = store.get('history') || []
-    history.unshift(record)
+    history.unshift(sanitized)
     // 保留最近 500 条
     if (history.length > 500) history.length = 500
     store.set('history', history)
@@ -97,12 +134,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
   ipcMain.handle('runtime:getAll', async () => {
     const store = getStore()
     return store.get('runtimeTasks') || []
-  })
-
-  ipcMain.handle('runtime:clear', async () => {
-    const store = getStore()
-    store.set('runtimeTasks', [])
-    return { success: true }
   })
 
   ipcMain.handle('runtime:remove', async (_, taskId) => {
@@ -146,65 +177,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
   })
 
   // ========== 应用信息 ==========
-  ipcMain.handle('app:getExePath', async () => {
-    const store = getStore()
-    const configured = (store.get('settings.exePath') as string) || ''
-    if (configured && existsSync(configured)) return configured
-
-    const possiblePaths = [
-      join(dirname(process.execPath), 'N_m3u8DL-RE.exe'),
-      join(dirname(process.execPath), 'bin', 'N_m3u8DL-RE.exe'),
-      join(app.getAppPath(), 'N_m3u8DL-RE.exe'),
-      join(app.getAppPath(), 'bin', 'N_m3u8DL-RE.exe'),
-      join(process.cwd(), 'N_m3u8DL-RE.exe'),
-      join(process.cwd(), 'bin', 'N_m3u8DL-RE.exe')
-    ]
-
-    for (const p of possiblePaths) {
-      if (existsSync(p)) return p
-    }
-
-    const envPath = process.env.PATH || ''
-    for (const candidate of envPath.split(delimiter)) {
-      const fullPath = join(candidate, 'N_m3u8DL-RE.exe')
-      if (existsSync(fullPath)) return fullPath
-    }
-
-    return ''
-  })
-
-  ipcMain.handle('app:checkToolPaths', async () => {
-    const store = getStore()
-
-    const check = (field: 'exePath' | 'ffmpegPath' | 'mp4decryptPath') => {
-      const configured = ((store.get(`settings.${field}`) as string) || '').trim()
-      const candidatePath = configured || ''
-
-      if (!candidatePath) {
-        return {
-          configured: '',
-          detected: '',
-          exists: false,
-          missing: true
-        }
-      }
-
-      const exists = existsSync(candidatePath)
-      return {
-        configured: candidatePath,
-        detected: exists ? candidatePath : '',
-        exists,
-        missing: !exists
-      }
-    }
-
-    return {
-      exe: check('exePath'),
-      ffmpeg: check('ffmpegPath'),
-      mp4decrypt: check('mp4decryptPath')
-    }
-  })
-
   ipcMain.handle('app:getVersion', async () => {
     return app.getVersion()
   })

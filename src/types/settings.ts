@@ -28,6 +28,9 @@ export interface AppSettings {
   autoSelect: boolean
   subOnly: boolean
 
+  // 批量任务并发数（UI 层，非 CLI 参数）
+  batchConcurrency: number
+
   // 合并控制
   binaryMerge: boolean
   checkSegmentsCount: boolean
@@ -76,10 +79,6 @@ export interface AppSettings {
 
   // HLS 高级
   allowHlsMultiExtMap: boolean
-
-  // UI（非 CLI 参数）
-  theme: 'dark' | 'light'
-  language: string
 
   // 自定义参数
   customArgs: string

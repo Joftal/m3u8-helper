@@ -20,15 +20,6 @@ const api = {
     start: (options: any) => ipcRenderer.invoke('download:start', options),
     cancel: (taskId: string) => ipcRenderer.invoke('download:cancel', taskId),
     delete: (taskId: string, taskInfo?: any) => ipcRenderer.invoke('download:delete', taskId, taskInfo),
-    waitForComplete: (taskId: string) => new Promise((resolve) => {
-      const listener = (_: unknown, data: any) => {
-        if (data?.taskId === taskId) {
-          ipcRenderer.removeListener('download:complete', listener)
-          resolve(data)
-        }
-      }
-      ipcRenderer.on('download:complete', listener)
-    }),
     onProgress: (callback: (data: any) => void) => {
       const listener = (_: unknown, data: any) => callback(data)
       ipcRenderer.on('download:progress', listener)
@@ -43,23 +34,11 @@ const api = {
       const listener = (_: unknown, data: any) => callback(data)
       ipcRenderer.on('download:complete', listener)
       return () => ipcRenderer.removeListener('download:complete', listener)
-    },
-    onStreamParsed: (callback: (data: any) => void) => {
-      const listener = (_: unknown, data: any) => callback(data)
-      ipcRenderer.on('streams:parsed', listener)
-      return () => ipcRenderer.removeListener('streams:parsed', listener)
-    },
-    removeAllListeners: () => {
-      ipcRenderer.removeAllListeners('download:progress')
-      ipcRenderer.removeAllListeners('download:log')
-      ipcRenderer.removeAllListeners('download:complete')
-      ipcRenderer.removeAllListeners('streams:parsed')
     }
   },
 
   // 设置
   settings: {
-    get: (key?: string) => ipcRenderer.invoke('settings:get', key),
     set: (key: string, value: any) => ipcRenderer.invoke('settings:set', key, value),
     getAll: () => ipcRenderer.invoke('settings:getAll'),
     getDefaults: () => ipcRenderer.invoke('settings:getDefaults'),
@@ -77,7 +56,6 @@ const api = {
   // 运行任务恢复
   runtime: {
     getAll: () => ipcRenderer.invoke('runtime:getAll'),
-    clear: () => ipcRenderer.invoke('runtime:clear'),
     remove: (taskId: string) => ipcRenderer.invoke('runtime:remove', taskId)
   },
 
@@ -96,8 +74,6 @@ const api = {
 
   // 应用信息
   app: {
-    getExePath: () => ipcRenderer.invoke('app:getExePath'),
-    checkToolPaths: () => ipcRenderer.invoke('app:checkToolPaths'),
     getVersion: () => ipcRenderer.invoke('app:getVersion')
   }
 }

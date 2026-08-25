@@ -12,7 +12,6 @@
   --border-strong: #dbe3f2;
   --text: #0f172a;
   --text-soft: #475569;
-  --text-muted: #64748b;
   --accent: #4f7cff;
   --accent-strong: #2d5af6;
   --accent-soft: #edf4ff;
@@ -92,10 +91,6 @@
     @apply mt-2 text-[2rem] leading-tight font-bold tracking-[-0.03em] text-slate-900;
   }
 
-  .page-subtitle {
-    @apply mt-1 text-sm text-slate-500;
-  }
-
   .settings-grid {
     @apply grid gap-6 xl:grid-cols-2;
   }
@@ -110,10 +105,6 @@
 
   .settings-icon-wrap {
     @apply flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200;
-  }
-
-  .metric-card {
-    @apply min-h-[118px] rounded-xl border border-slate-200 bg-slate-50/80 p-3.5 shadow-sm;
   }
 
   .field-shell {
@@ -180,21 +171,9 @@
   .tag-warning {
     @apply bg-amber-50 text-amber-700;
   }
-
-  .section-title {
-    @apply text-sm font-semibold text-slate-900 tracking-tight;
-  }
-
-  .text-muted {
-    @apply text-sm text-slate-500;
-  }
 }
 
 @layer utilities {
-  .progress-bar {
-    background: linear-gradient(90deg, #5a88ff, #5bdbd8);
-  }
-
   .drag-region {
     -webkit-app-region: drag;
   }

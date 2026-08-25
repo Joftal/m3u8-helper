@@ -1,19 +1,14 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import * as XLSX from 'xlsx'
 import {
-  Activity,
-  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Clipboard,
-  Download,
   FileText,
-  FolderOpen,
   Link,
   Play,
   Radio,
   Settings2,
-  Sparkles,
   Square,
   Trash2,
   Upload,
@@ -26,12 +21,59 @@ import { showToast } from '@/components/Toast'
 import { extractFileName, formatDuration, formatFileSize, generateId } from '@/utils/format'
 import { isValidUrl } from '@/utils/validators'
 import type { DownloadTask } from '@/types/download'
+import type { AppSettings } from '@/types/settings'
+
+/**
+ * 由全局设置生成任务参数基座，调用方通过 overrides 覆盖差异字段。
+ * 消除下载/录制/批量三处重复的 settings→options 手写映射。
+ */
+function buildTaskOptions(settings: AppSettings, overrides: Partial<DownloadTask['options']> = {}): DownloadTask['options'] {
+  return {
+    saveDir: settings.saveDir,
+    tmpDir: settings.tmpDir,
+    threadCount: settings.threadCount,
+    autoSelect: settings.autoSelect,
+    delAfterDone: settings.delAfterDone,
+    muxFormat: settings.muxFormat,
+    maxSpeed: settings.maxSpeed || undefined,
+    ffmpegPath: settings.ffmpegPath || undefined,
+    mp4decryptPath: settings.mp4decryptPath || undefined,
+    autoSubtitleFix: settings.autoSubtitleFix,
+    subFormat: settings.subFormat,
+    binaryMerge: settings.binaryMerge,
+    writeMetaJson: settings.writeMetaJson,
+    concurrentDownload: settings.concurrentDownload,
+    useSystemProxy: settings.useSystemProxy,
+    proxy: settings.proxy || undefined,
+    headers: Object.keys(settings.headers).length > 0 ? settings.headers : undefined,
+    logLevel: settings.logLevel,
+    decryptionEngine: settings.decryptionEngine,
+    downloadRetryCount: settings.downloadRetryCount,
+    httpRequestTimeout: settings.httpRequestTimeout,
+    checkSegmentsCount: settings.checkSegmentsCount,
+    baseUrl: settings.baseUrl || undefined,
+    skipMerge: settings.skipMerge || undefined,
+    customHlsMethod: settings.customHlsMethod || undefined,
+    customHlsKey: settings.customHlsKey || undefined,
+    customHlsIv: settings.customHlsIv || undefined,
+    customRange: settings.customRange || undefined,
+    adKeywords: settings.adKeywords?.length > 0 ? settings.adKeywords : undefined,
+    allowHlsMultiExtMap: settings.allowHlsMultiExtMap || undefined,
+    keyTextFile: settings.keyTextFile || undefined,
+    mp4RealTimeDecryption: settings.mp4RealTimeDecryption || undefined,
+    appendUrlParams: settings.appendUrlParams || undefined,
+    noDateInfo: settings.noDateInfo || undefined,
+    noLog: settings.noLog || undefined,
+    // overrides 由内部调用点受控传入；展开后 TS 将必填字段放宽为可空，这里统一收窄
+    ...overrides
+  } as DownloadTask['options']
+}
 
 interface BatchItem {
   id: string
   url: string
   saveName: string
-  status: 'pending' | 'running' | 'completed' | 'failed'
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
   progress: number
   taskId?: string
 }
@@ -56,37 +98,6 @@ function getTaskRuntimeSeconds(startTime?: string): number {
   return Math.max(0, Math.floor((Date.now() - start) / 1000))
 }
 
-function formatNetworkSpeed(bytesPerSecond: number): string {
-  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 KB/s'
-
-  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
-  let value = bytesPerSecond
-  let unitIndex = 0
-
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024
-    unitIndex += 1
-  }
-
-  const precision = value >= 10 ? 1 : 2
-  return `${value.toFixed(precision)} ${units[unitIndex]}`
-}
-
-function parseSpeedToBytesPerSecond(raw: string): number {
-  const match = raw.match(/([\d.]+)\s*(B\/s|KB\/s|MB\/s|GB\/s|Bps|KBps|MBps|GBps)/i)
-  if (!match) return 0
-
-  const value = Number(match[1]) || 0
-  const unit = match[2].toLowerCase().replace(/ps$/, '/s')
-  const base: Record<string, number> = {
-    'b/s': 1,
-    'kb/s': 1024,
-    'mb/s': 1024 * 1024,
-    'gb/s': 1024 * 1024 * 1024
-  }
-  return value * (base[unit] ?? 1)
-}
-
 const statusMap = {
   pending: { label: '等待', tone: 'bg-slate-100 text-slate-600' },
   running: { label: '进行中', tone: 'bg-blue-50 text-blue-700' },
@@ -102,8 +113,6 @@ export default function Home() {
   const [downloadName, setDownloadName] = useState('')
   const [showDownloadAdvanced, setShowDownloadAdvanced] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
-  const [downloadElapsed, setDownloadElapsed] = useState(0)
-  const downloadTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [downloadThreadCount, setDownloadThreadCount] = useState(8)
   const [downloadAutoSelect, setDownloadAutoSelect] = useState(true)
   const [downloadMuxFormat, setDownloadMuxFormat] = useState('mp4')
@@ -115,6 +124,8 @@ export default function Home() {
   const [recordName, setRecordName] = useState('')
   const [isRecording, setIsRecording] = useState(false)
   const [recordTaskId, setRecordTaskId] = useState<string | null>(null)
+  // IPC 订阅固化后 handler 无法捕获 state，改用 ref 读取最新录制任务 ID
+  const recordTaskIdRef = useRef<string | null>(null)
   const [recordDuration, setRecordDuration] = useState(0)
   const [recordSize, setRecordSize] = useState(0)
   const [showRecordAdvanced, setShowRecordAdvanced] = useState(false)
@@ -132,6 +143,10 @@ export default function Home() {
   const [isBatchRunning, setIsBatchRunning] = useState(false)
   const [deleteConfirmTask, setDeleteConfirmTask] = useState<DownloadTask | null>(null)
   const batchFileInputRef = useRef<HTMLInputElement | null>(null)
+  // 批量队列用：任务结束时通过 download:complete 事件释放并发槽位
+  const completionResolvers = useRef(new Map<string, () => void>())
+  // 批量队列整体停止标志
+  const batchAbortRef = useRef(false)
 
   const { tasks, activeTaskId, addTask, updateTask, setActiveTask, removeTask } = useDownloadStore()
   const { settings } = useSettingsStore()
@@ -159,14 +174,14 @@ export default function Home() {
       })
       setBatchItems((prev) => prev.map((entry) => {
         if (entry.taskId !== data.taskId) return entry
-        const nextStatus = data.status === 'completed' ? 'completed' : data.status === 'failed' || data.status === 'cancelled' ? 'failed' : 'running'
+        const nextStatus = data.status === 'completed' ? 'completed' : data.status === 'cancelled' ? 'cancelled' : data.status === 'failed' ? 'failed' : 'running'
         return {
           ...entry,
           status: nextStatus,
           progress: typeof data.progress === 'number' ? Number(data.progress) : entry.progress
         }
       }))
-      if (data.taskId === recordTaskId) {
+      if (data.taskId === recordTaskIdRef.current) {
         setRecordSize((prev) => Math.max(prev, Number(data.downloadedBytes || prev || 0)))
       }
     }
@@ -180,11 +195,18 @@ export default function Home() {
     }
 
     const handleComplete = (data: any) => {
+      // 释放批量队列中等待该任务的并发槽位
+      const resolver = completionResolvers.current.get(data.taskId)
+      if (resolver) {
+        completionResolvers.current.delete(data.taskId)
+        resolver()
+      }
+
       const task = useDownloadStore.getState().getTask(data.taskId)
       if (task) {
         updateTask(data.taskId, {
           status: data.status,
-          progress: typeof data.progress === 'number' ? data.progress : 100,
+          progress: typeof data.progress === 'number' ? data.progress : task.progress,
           speed: data.speed || task.speed || '0 KB/s',
           downloadedSegments: typeof data.downloadedSegments === 'number' ? data.downloadedSegments : task.downloadedSegments,
           totalSegments: typeof data.totalSegments === 'number' ? data.totalSegments : task.totalSegments,
@@ -202,14 +224,14 @@ export default function Home() {
           startTime: task.startTime,
           endTime: new Date().toISOString(),
           fileSize: Number(task.totalBytes || task.downloadedBytes || 0),
-          outputPath: task.saveDir || task.options?.saveDir || settings.saveDir || '',
+          outputPath: task.saveDir || task.options?.saveDir || useSettingsStore.getState().settings.saveDir || '',
           duration: getTaskRuntimeSeconds(task.startTime)
         })
       }
 
       setBatchItems((prev) => prev.map((entry) => {
         if (entry.taskId !== data.taskId) return entry
-        const nextStatus = data.status === 'completed' ? 'completed' : data.status === 'failed' || data.status === 'cancelled' ? 'failed' : 'running'
+        const nextStatus = data.status === 'completed' ? 'completed' : data.status === 'cancelled' ? 'cancelled' : data.status === 'failed' ? 'failed' : 'running'
         return {
           ...entry,
           status: nextStatus,
@@ -217,9 +239,10 @@ export default function Home() {
         }
       }))
 
-      if (data.taskId === recordTaskId) {
+      if (data.taskId === recordTaskIdRef.current) {
         setIsRecording(false)
         setRecordTaskId(null)
+        recordTaskIdRef.current = null
         if (recordTimerRef.current) clearInterval(recordTimerRef.current)
       }
 
@@ -229,7 +252,6 @@ export default function Home() {
       })
       if (!hasActiveDownload) {
         setIsDownloading(false)
-        if (downloadTimerRef.current) clearInterval(downloadTimerRef.current)
       }
     }
 
@@ -242,41 +264,15 @@ export default function Home() {
       offLog()
       offComplete()
     }
-  }, [addRecord, recordTaskId, tasks, updateTask])
+    // 订阅仅挂载时注册一次：handler 内通过 getState()/ref 取最新值，避免随进度更新反复重挂
+  }, [])
 
   const downloadTasks = tasks.filter((task) => !isRecordTask(task))
   const recordTasks = tasks.filter((task) => isRecordTask(task))
+  const visibleTasks = activeTab === 'download' ? downloadTasks : recordTasks
   const activeDownloadTask = downloadTasks.find((task) => task.id === activeTaskId) ?? downloadTasks[0] ?? null
   const activeRecordTask = recordTasks.find((task) => task.id === activeTaskId) ?? recordTasks[0] ?? null
   const currentTask = activeTab === 'download' ? activeDownloadTask : activeRecordTask
-
-  const getTaskMeta = (task: DownloadTask) => {
-    const progress = Math.min(100, Math.max(0, Number(task.progress) || 0))
-    const downloadedBytes = Number(task.downloadedBytes ?? 0)
-    const totalBytes = Number(task.totalBytes ?? 0)
-    const sizeSummary = totalBytes > 0
-      ? `${formatFileSize(downloadedBytes)} / ${formatFileSize(totalBytes)}`
-      : task.totalSegments > 0
-        ? `${task.downloadedSegments || 0} / ${task.totalSegments}`
-        : '0 / 0'
-
-    if (isRecordTask(task)) {
-      return {
-        tag: '录制任务',
-        status: statusMap[task.status].label,
-        progressText: `${progress}%`,
-        sizeSummary,
-        speed: task.speed || '0 KB/s'
-      }
-    }
-    return {
-      tag: '下载任务',
-      status: statusMap[task.status].label,
-      progressText: `${progress}%`,
-      sizeSummary,
-      speed: task.speed || '0 KB/s'
-    }
-  }
 
   const getTaskActionMessage = (
     action: '取消' | '重试' | '删除',
@@ -321,57 +317,22 @@ export default function Home() {
     }
 
     setIsDownloading(true)
-    setDownloadElapsed(0)
-    if (downloadTimerRef.current) clearInterval(downloadTimerRef.current)
-    downloadTimerRef.current = setInterval(() => setDownloadElapsed((prev) => prev + 1), 1000)
 
-    const taskOptions = {
+    const taskOptions = buildTaskOptions(settings, {
       url: downloadUrl.trim(),
       saveName: downloadName || extractFileName(downloadUrl),
-      saveDir: settings.saveDir,
-      tmpDir: settings.tmpDir,
       threadCount: downloadThreadCount,
       autoSelect: downloadAutoSelect,
       muxFormat: downloadMuxFormat,
       maxSpeed: downloadMaxSpeed || undefined,
       subOnly: downloadSubOnly,
       customArgs: downloadCustomArgs || undefined,
-      ffmpegPath: settings.ffmpegPath || undefined,
-      mp4decryptPath: settings.mp4decryptPath || undefined,
-      autoSubtitleFix: settings.autoSubtitleFix,
-      subFormat: settings.subFormat,
-      binaryMerge: settings.binaryMerge,
-      writeMetaJson: settings.writeMetaJson,
-      concurrentDownload: settings.concurrentDownload,
-      delAfterDone: settings.delAfterDone,
-      useSystemProxy: settings.useSystemProxy,
-      proxy: settings.proxy || undefined,
-      headers: Object.keys(settings.headers).length > 0 ? settings.headers : undefined,
-      logLevel: settings.logLevel,
-      decryptionEngine: settings.decryptionEngine,
-      downloadRetryCount: settings.downloadRetryCount,
-      httpRequestTimeout: settings.httpRequestTimeout,
-      checkSegmentsCount: settings.checkSegmentsCount,
-      baseUrl: settings.baseUrl || undefined,
-      skipMerge: settings.skipMerge || undefined,
-      customHlsMethod: settings.customHlsMethod || undefined,
-      customHlsKey: settings.customHlsKey || undefined,
-      customHlsIv: settings.customHlsIv || undefined,
-      customRange: settings.customRange || undefined,
-      adKeywords: settings.adKeywords?.length > 0 ? settings.adKeywords : undefined,
-      allowHlsMultiExtMap: settings.allowHlsMultiExtMap || undefined,
-      keyTextFile: settings.keyTextFile || undefined,
-      mp4RealTimeDecryption: settings.mp4RealTimeDecryption || undefined,
-      appendUrlParams: settings.appendUrlParams || undefined,
-      noDateInfo: settings.noDateInfo || undefined,
-      noLog: settings.noLog || undefined,
-    }
+    })
 
     const result = await window.api.download.start(taskOptions)
     if (!result.success) {
       showToast('error', `启动失败: ${result.error}`)
       setIsDownloading(false)
-      if (downloadTimerRef.current) clearInterval(downloadTimerRef.current)
       return
     }
 
@@ -412,15 +373,10 @@ export default function Home() {
     if (recordTimerRef.current) clearInterval(recordTimerRef.current)
     recordTimerRef.current = setInterval(() => setRecordDuration((prev) => prev + 1), 1000)
 
-    const taskOptions = {
+    const taskOptions = buildTaskOptions(settings, {
       url: recordUrl.trim(),
       saveName: recordName || extractFileName(recordUrl),
-      saveDir: settings.saveDir,
-      tmpDir: settings.tmpDir,
-      threadCount: settings.threadCount,
       autoSelect: true,
-      delAfterDone: settings.delAfterDone,
-      muxFormat: settings.muxFormat,
       liveRealTimeMerge,
       livePipeMux,
       livePerformAsVod,
@@ -428,12 +384,7 @@ export default function Home() {
       liveRecordLimit: liveRecordLimit || undefined,
       liveWaitTime: liveWaitTime ? Number(liveWaitTime) : undefined,
       liveTakeCount: Number(liveTakeCount) || 16,
-      maxSpeed: settings.maxSpeed || undefined,
-      proxy: settings.proxy || undefined,
-      headers: Object.keys(settings.headers).length > 0 ? settings.headers : undefined,
-      autoSubtitleFix: settings.autoSubtitleFix,
-      logLevel: settings.logLevel,
-    }
+    })
 
     const result = await window.api.download.start(taskOptions)
     if (!result.success) {
@@ -445,6 +396,7 @@ export default function Home() {
 
     const taskId = result.taskId || generateId()
     setRecordTaskId(taskId)
+    recordTaskIdRef.current = taskId
     const task: DownloadTask = {
       id: taskId,
       url: recordUrl.trim(),
@@ -672,6 +624,25 @@ export default function Home() {
     }
   }
 
+  const waitForTaskCompletion = (taskId: string) =>
+    new Promise<void>((resolve) => {
+      completionResolvers.current.set(taskId, resolve)
+    })
+
+  const runWithConcurrency = async (items: BatchItem[], limit: number, worker: (item: BatchItem) => Promise<void>) => {
+    let cursor = 0
+    const size = Math.min(Math.max(1, Math.floor(limit)), items.length)
+    const runners = Array.from({ length: size }, async () => {
+      while (cursor < items.length) {
+        if (batchAbortRef.current) return
+        const item = items[cursor]
+        cursor += 1
+        await worker(item)
+      }
+    })
+    await Promise.all(runners)
+  }
+
   const startBatch = async () => {
     if (batchItems.length === 0) {
       showToast('error', '请先添加下载链接')
@@ -679,76 +650,56 @@ export default function Home() {
     }
 
     setIsBatchRunning(true)
-    for (const item of batchItems) {
+    batchAbortRef.current = false
+
+    await runWithConcurrency(batchItems, settings.batchConcurrency || 2, async (item) => {
       setBatchItems((prev) => prev.map((entry) => entry.id === item.id ? { ...entry, status: 'running', taskId: undefined } : entry))
 
-      const options = {
+      const options = buildTaskOptions(settings, {
+        url: item.url,
+        saveName: item.saveName,
+      })
+
+      const result = await window.api.download.start(options)
+      if (!result.success) {
+        setBatchItems((prev) => prev.map((entry) => entry.id === item.id ? { ...entry, status: 'failed', taskId: undefined } : entry))
+        return
+      }
+
+      const taskId = result.taskId || item.id
+      const task: DownloadTask = {
+        id: taskId,
         url: item.url,
         saveName: item.saveName,
         saveDir: settings.saveDir,
-        tmpDir: settings.tmpDir,
-        threadCount: settings.threadCount,
-        autoSelect: settings.autoSelect,
-        delAfterDone: settings.delAfterDone,
-        muxFormat: settings.muxFormat,
-        maxSpeed: settings.maxSpeed || undefined,
-        ffmpegPath: settings.ffmpegPath || undefined,
-        mp4decryptPath: settings.mp4decryptPath || undefined,
-        autoSubtitleFix: settings.autoSubtitleFix,
-        subFormat: settings.subFormat,
-        binaryMerge: settings.binaryMerge,
-        writeMetaJson: settings.writeMetaJson,
-        concurrentDownload: settings.concurrentDownload,
-        useSystemProxy: settings.useSystemProxy,
-        proxy: settings.proxy || undefined,
-        headers: Object.keys(settings.headers).length > 0 ? settings.headers : undefined,
-        logLevel: settings.logLevel,
-        decryptionEngine: settings.decryptionEngine,
-        downloadRetryCount: settings.downloadRetryCount,
-        httpRequestTimeout: settings.httpRequestTimeout,
-        checkSegmentsCount: settings.checkSegmentsCount,
-        baseUrl: settings.baseUrl || undefined,
-        skipMerge: settings.skipMerge || undefined,
-        customHlsMethod: settings.customHlsMethod || undefined,
-        customHlsKey: settings.customHlsKey || undefined,
-        customHlsIv: settings.customHlsIv || undefined,
-        customRange: settings.customRange || undefined,
-        adKeywords: settings.adKeywords?.length > 0 ? settings.adKeywords : undefined,
-        allowHlsMultiExtMap: settings.allowHlsMultiExtMap || undefined,
-        keyTextFile: settings.keyTextFile || undefined,
-        mp4RealTimeDecryption: settings.mp4RealTimeDecryption || undefined,
-        appendUrlParams: settings.appendUrlParams || undefined,
-        noDateInfo: settings.noDateInfo || undefined,
-        noLog: settings.noLog || undefined,
+        status: 'pending',
+        progress: 0,
+        speed: '0 KB/s',
+        downloadedSegments: 0,
+        totalSegments: 0,
+        startTime: new Date().toISOString(),
+        logs: [],
+        options
       }
+      addTask(task)
+      setActiveTask(taskId)
+      setBatchItems((prev) => prev.map((entry) => entry.id === item.id ? { ...entry, status: 'running', taskId } : entry))
 
-      const result = await window.api.download.start(options)
-      if (result.success) {
-        const taskId = result.taskId || item.id
-        const task: DownloadTask = {
-          id: taskId,
-          url: item.url,
-          saveName: item.saveName,
-          saveDir: settings.saveDir,
-          status: 'pending',
-          progress: 0,
-          speed: '0 KB/s',
-          downloadedSegments: 0,
-          totalSegments: 0,
-          startTime: new Date().toISOString(),
-          logs: [],
-          options
-        }
-        addTask(task)
-        setActiveTask(taskId)
-        setBatchItems((prev) => prev.map((entry) => entry.id === item.id ? { ...entry, status: 'running', taskId } : entry))
-      } else {
-        setBatchItems((prev) => prev.map((entry) => entry.id === item.id ? { ...entry, status: 'failed', taskId: undefined } : entry))
+      // 等待该任务真正结束（完成/取消/失败都会发出 download:complete）再释放并发槽位
+      if (result.taskId) {
+        await waitForTaskCompletion(taskId)
       }
-    }
+    })
 
+    const aborted = batchAbortRef.current
+    batchAbortRef.current = false
     setIsBatchRunning(false)
-    showToast('success', '批量下载已处理完成')
+    showToast(aborted ? 'info' : 'success', aborted ? '批量下载已停止，剩余任务保持待处理' : '批量下载已全部处理完成')
+  }
+
+  const stopBatch = () => {
+    batchAbortRef.current = true
+    showToast('info', '正在停止批量任务，进行中的任务将继续完成…')
   }
 
   const syncTaskRuntimeFlags = () => {
@@ -757,10 +708,6 @@ export default function Home() {
     const hasActiveRecord = liveTasks.some((candidate) => isRecordTask(candidate) && (candidate.status === 'pending' || candidate.status === 'running'))
 
     setIsDownloading(hasActiveDownload)
-    if (!hasActiveDownload && downloadTimerRef.current) {
-      clearInterval(downloadTimerRef.current)
-      downloadTimerRef.current = null
-    }
 
     setIsRecording(hasActiveRecord)
     if (!hasActiveRecord && recordTimerRef.current) {
@@ -771,7 +718,7 @@ export default function Home() {
 
   const deleteTaskArtifactsAndCleanup = async (task: DownloadTask) => {
     try {
-      const result = await (window.api as any).download.delete(task.id, {
+      const result = await window.api.download.delete(task.id, {
         saveDir: task.saveDir || settings.saveDir,
         saveName: task.saveName,
         tmpDir: task.options?.tmpDir || settings.tmpDir,
@@ -782,7 +729,7 @@ export default function Home() {
         return { success: false, message: result?.error || '清理失败：相关下载文件未能删除' }
       }
       removeTask(task.id)
-      await (window.api as any).runtime.remove(task.id)
+      await window.api.runtime.remove(task.id)
       if (task.id === activeTaskId) setActiveTask(null)
       await removeRecord(task.id)
       syncTaskRuntimeFlags()
@@ -895,7 +842,7 @@ export default function Home() {
     const canCancel = task.status === 'running' || task.status === 'pending'
     const canRetry = task.status === 'failed' || task.status === 'cancelled'
     const canDelete = task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled'
-    const statusText = task.status === 'completed' ? '已完成' : task.status === 'failed' ? '失败' : task.status === 'cancelled' ? '已取消' : task.status === 'running' ? '下载中' : '等待中'
+    const statusText = task.status === 'running' ? '下载中' : statusMap[task.status].label
 
     return (
       <div key={task.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-2.5 shadow-sm">
@@ -1109,6 +1056,11 @@ export default function Home() {
                 <button onClick={startBatch} disabled={isBatchRunning || batchItems.length === 0} className="btn-secondary flex items-center gap-1.5 text-sm">
                   {isBatchRunning ? '处理中...' : '开始全部'}
                 </button>
+                {isBatchRunning && (
+                  <button onClick={stopBatch} className="btn-secondary flex items-center gap-1.5 text-sm">
+                    停止批量
+                  </button>
+                )}
               </div>
 
               <input
@@ -1127,8 +1079,8 @@ export default function Home() {
                         <div className="truncate font-medium text-slate-700">{item.saveName}</div>
                         <div className="truncate text-[11px] text-slate-500">{item.url}</div>
                       </div>
-                      <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${item.status === 'completed' ? 'bg-emerald-50 text-emerald-700' : item.status === 'failed' ? 'bg-red-50 text-red-700' : item.status === 'running' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>
-                        {item.status === 'completed' ? '已完成' : item.status === 'failed' ? '失败' : item.status === 'running' ? '下载中' : '待处理'}
+                      <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${item.status === 'completed' ? 'bg-emerald-50 text-emerald-700' : item.status === 'failed' ? 'bg-red-50 text-red-700' : item.status === 'cancelled' ? 'bg-amber-50 text-amber-700' : item.status === 'running' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>
+                        {item.status === 'completed' ? '已完成' : item.status === 'failed' ? '失败' : item.status === 'cancelled' ? '已取消' : item.status === 'running' ? '下载中' : '待处理'}
                       </span>
                     </div>
                   ))}
@@ -1224,11 +1176,11 @@ export default function Home() {
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <div className="text-[11px] font-bold tracking-[0.18em] text-slate-500 uppercase">任务列表</div>
-          <span className="text-xs text-slate-500">{(activeTab === 'download' ? downloadTasks : recordTasks).length} 个任务</span>
+          <span className="text-xs text-slate-500">{visibleTasks.length} 个任务</span>
         </div>
         <div className="card p-3">
           <div className="space-y-2">
-            {(activeTab === 'download' ? downloadTasks : recordTasks).length > 0 ? (activeTab === 'download' ? downloadTasks : recordTasks).map((task, index) => renderTaskRow(task, index)) : (
+            {visibleTasks.length > 0 ? visibleTasks.map((task, index) => renderTaskRow(task, index)) : (
               <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500 text-center">
                 暂无{activeTab === 'download' ? '下载' : '录制'}任务，直接在上方创建{activeTab === 'download' ? '下载' : '录制'}任务。
               </div>

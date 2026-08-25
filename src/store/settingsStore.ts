@@ -20,6 +20,7 @@ export const defaultSettings: AppSettings = {
   maxSpeed: '',
   autoSelect: true,
   subOnly: false,
+  batchConcurrency: 2,
   binaryMerge: false,
   checkSegmentsCount: true,
   useFFmpegConcatDemuxer: false,
@@ -47,8 +48,6 @@ export const defaultSettings: AppSettings = {
   customRange: '',
   adKeywords: [],
   allowHlsMultiExtMap: false,
-  theme: 'light',
-  language: 'zh-CN',
   customArgs: ''
 }
 
@@ -100,26 +99,11 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
     }
   },
   resetSettings: async () => {
-    const [current, defaultValues] = await Promise.all([
-      window.api.settings.getAll(),
-      window.api.settings.getDefaults()
-    ])
-    const mergedDefaults = { ...defaultSettings, ...defaultValues }
-    const next: Record<string, any> = { ...mergedDefaults, ...(current ?? {}) }
-    const keys = Object.keys(mergedDefaults) as string[]
-
-    for (const key of keys) {
-      if (!(resetExcludedKeys as readonly string[]).includes(key)) {
-        next[key] = mergedDefaults[key]
-      }
+    // 重置逻辑以主进程 store.resetSettings 为唯一实现，渲染端仅采纳其返回的权威配置
+    const result = await window.api.settings.resetAll([...resetExcludedKeys])
+    if (result?.success && result.settings) {
+      const sanitized = validateSettings(result.settings as unknown as Record<string, unknown>).settings as unknown as AppSettings
+      set({ settings: sanitized, loaded: true })
     }
-
-    for (const key of resetExcludedKeys as readonly string[]) {
-      next[key] = current?.[key] ?? mergedDefaults[key]
-    }
-
-    const sanitized = validateSettings(next as unknown as Record<string, unknown>).settings as unknown as AppSettings
-    set({ settings: sanitized, loaded: true })
-    await window.api.settings.resetAll([...resetExcludedKeys])
   }
 }))
