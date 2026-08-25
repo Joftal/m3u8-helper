@@ -20,54 +20,9 @@ import Modal from '@/components/Modal'
 import { showToast } from '@/components/Toast'
 import { extractFileName, formatDuration, formatFileSize, generateId } from '@/utils/format'
 import { isValidUrl } from '@/utils/validators'
+import { TASK_STATUS_META } from '@/utils/status'
+import { buildTaskOptions } from '@/utils/taskOptions'
 import type { DownloadTask } from '@/types/download'
-import type { AppSettings } from '@/types/settings'
-
-/**
- * 由全局设置生成任务参数基座，调用方通过 overrides 覆盖差异字段。
- * 消除下载/录制/批量三处重复的 settings→options 手写映射。
- */
-function buildTaskOptions(settings: AppSettings, overrides: Partial<DownloadTask['options']> = {}): DownloadTask['options'] {
-  return {
-    saveDir: settings.saveDir,
-    tmpDir: settings.tmpDir,
-    threadCount: settings.threadCount,
-    autoSelect: settings.autoSelect,
-    delAfterDone: settings.delAfterDone,
-    muxFormat: settings.muxFormat,
-    maxSpeed: settings.maxSpeed || undefined,
-    ffmpegPath: settings.ffmpegPath || undefined,
-    mp4decryptPath: settings.mp4decryptPath || undefined,
-    autoSubtitleFix: settings.autoSubtitleFix,
-    subFormat: settings.subFormat,
-    binaryMerge: settings.binaryMerge,
-    writeMetaJson: settings.writeMetaJson,
-    concurrentDownload: settings.concurrentDownload,
-    useSystemProxy: settings.useSystemProxy,
-    proxy: settings.proxy || undefined,
-    headers: Object.keys(settings.headers).length > 0 ? settings.headers : undefined,
-    logLevel: settings.logLevel,
-    decryptionEngine: settings.decryptionEngine,
-    downloadRetryCount: settings.downloadRetryCount,
-    httpRequestTimeout: settings.httpRequestTimeout,
-    checkSegmentsCount: settings.checkSegmentsCount,
-    baseUrl: settings.baseUrl || undefined,
-    skipMerge: settings.skipMerge || undefined,
-    customHlsMethod: settings.customHlsMethod || undefined,
-    customHlsKey: settings.customHlsKey || undefined,
-    customHlsIv: settings.customHlsIv || undefined,
-    customRange: settings.customRange || undefined,
-    adKeywords: settings.adKeywords?.length > 0 ? settings.adKeywords : undefined,
-    allowHlsMultiExtMap: settings.allowHlsMultiExtMap || undefined,
-    keyTextFile: settings.keyTextFile || undefined,
-    mp4RealTimeDecryption: settings.mp4RealTimeDecryption || undefined,
-    appendUrlParams: settings.appendUrlParams || undefined,
-    noDateInfo: settings.noDateInfo || undefined,
-    noLog: settings.noLog || undefined,
-    // overrides 由内部调用点受控传入；展开后 TS 将必填字段放宽为可空，这里统一收窄
-    ...overrides
-  } as DownloadTask['options']
-}
 
 interface BatchItem {
   id: string
@@ -98,13 +53,17 @@ function getTaskRuntimeSeconds(startTime?: string): number {
   return Math.max(0, Math.floor((Date.now() - start) / 1000))
 }
 
-const statusMap = {
-  pending: { label: '等待', tone: 'bg-slate-100 text-slate-600' },
-  running: { label: '进行中', tone: 'bg-blue-50 text-blue-700' },
-  completed: { label: '已完成', tone: 'bg-emerald-50 text-emerald-700' },
-  failed: { label: '失败', tone: 'bg-red-50 text-red-700' },
-  cancelled: { label: '已取消', tone: 'bg-amber-50 text-amber-700' }
-} as const
+/** 解析 "HH:mm:ss" / "mm:ss" 为秒；格式非法返回 -1 */
+function parseLiveLimitRaw(raw: string): number {
+  const trimmed = raw.trim()
+  if (!trimmed) return -1
+  const parts = trimmed.split(':').map(Number)
+  if (parts.length < 2 || parts.length > 3) return -1
+  if (parts.some((n) => !Number.isFinite(n) || n < 0)) return -1
+  return parts.length === 3
+    ? parts[0] * 3600 + parts[1] * 60 + parts[2]
+    : parts[0] * 60 + parts[1]
+}
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<'download' | 'record'>('download')
@@ -122,12 +81,11 @@ export default function Home() {
 
   const [recordUrl, setRecordUrl] = useState('')
   const [recordName, setRecordName] = useState('')
-  const [isRecording, setIsRecording] = useState(false)
   const [recordTaskId, setRecordTaskId] = useState<string | null>(null)
   // IPC 订阅固化后 handler 无法捕获 state，改用 ref 读取最新录制任务 ID
   const recordTaskIdRef = useRef<string | null>(null)
-  const [recordDuration, setRecordDuration] = useState(0)
-  const [recordSize, setRecordSize] = useState(0)
+  // 录制发起请求进行中：防止双击重复创建
+  const [recordStarting, setRecordStarting] = useState(false)
   const [showRecordAdvanced, setShowRecordAdvanced] = useState(false)
   const [liveRealTimeMerge, setLiveRealTimeMerge] = useState(true)
   const [livePipeMux, setLivePipeMux] = useState(false)
@@ -136,7 +94,8 @@ export default function Home() {
   const [liveRecordLimit, setLiveRecordLimit] = useState('')
   const [liveWaitTime, setLiveWaitTime] = useState('')
   const [liveTakeCount, setLiveTakeCount] = useState('16')
-  const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // 录制计时基准：由任务 startTime 派生（单一数据源），仅在存在活跃录制时每秒跳动
+  const [nowTs, setNowTs] = useState(() => Date.now())
 
   const [batchText, setBatchText] = useState('')
   const [batchItems, setBatchItems] = useState<BatchItem[]>([])
@@ -181,9 +140,6 @@ export default function Home() {
           progress: typeof data.progress === 'number' ? Number(data.progress) : entry.progress
         }
       }))
-      if (data.taskId === recordTaskIdRef.current) {
-        setRecordSize((prev) => Math.max(prev, Number(data.downloadedBytes || prev || 0)))
-      }
     }
 
     const handleLog = (data: any) => {
@@ -240,10 +196,8 @@ export default function Home() {
       }))
 
       if (data.taskId === recordTaskIdRef.current) {
-        setIsRecording(false)
         setRecordTaskId(null)
         recordTaskIdRef.current = null
-        if (recordTimerRef.current) clearInterval(recordTimerRef.current)
       }
 
       const hasActiveDownload = useDownloadStore.getState().tasks.some((candidate) => {
@@ -272,7 +226,48 @@ export default function Home() {
   const visibleTasks = activeTab === 'download' ? downloadTasks : recordTasks
   const activeDownloadTask = downloadTasks.find((task) => task.id === activeTaskId) ?? downloadTasks[0] ?? null
   const activeRecordTask = recordTasks.find((task) => task.id === activeTaskId) ?? recordTasks[0] ?? null
-  const currentTask = activeTab === 'download' ? activeDownloadTask : activeRecordTask
+
+  // 录制计时 ticker：仅在录制 Tab 可见且存在活跃录制任务时运行，
+  // 驱动基于 startTime 的已录时长刷新（下载 Tab 期间录制 UI 不可见，无需空转重渲染）
+  const activeRecordCount = recordTasks.filter((task) => task.status === 'running' || task.status === 'pending').length
+  const hasLiveRecord = activeRecordCount > 0
+  const recordTickerActive = hasLiveRecord && activeTab === 'record'
+  useEffect(() => {
+    if (!recordTickerActive) return
+    setNowTs(Date.now())
+    const timer = setInterval(() => setNowTs(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [recordTickerActive])
+
+  /** 录制任务已录时长（秒）；非活跃任务返回 null（无持续计时语义） */
+  const getRecordElapsed = (task: DownloadTask): number | null => {
+    if (task.status !== 'running' && task.status !== 'pending') return null
+    const start = Date.parse(task.startTime)
+    if (Number.isNaN(start)) return 0
+    return Math.max(0, Math.floor((nowTs - start) / 1000))
+  }
+
+  /** 解析录制时长限制为秒；未配置或非法返回 0（隐藏限额条） */
+  const parseLiveLimitSeconds = (task: DownloadTask): number => {
+    const seconds = parseLiveLimitRaw(String(task.options?.liveRecordLimit || ''))
+    return seconds > 0 ? seconds : 0
+  }
+
+  // 录制监控面板数据（选中/首个录制任务）
+  const monitorTask = activeRecordTask
+  const monitorIsLive = !!monitorTask && (monitorTask.status === 'running' || monitorTask.status === 'pending')
+  const monitorElapsed = monitorTask ? getRecordElapsed(monitorTask) ?? 0 : 0
+  const monitorLimitSeconds = monitorTask ? parseLiveLimitSeconds(monitorTask) : 0
+  const monitorLimitPct = monitorIsLive && monitorLimitSeconds > 0
+    ? Math.min(100, (monitorElapsed / monitorLimitSeconds) * 100)
+    : 0
+  // 直播模式下 CLI 通常不输出分片汇总：分片为 0 且有帧率数据时改显帧率
+  const monitorSegs = monitorTask ? Number(monitorTask.downloadedSegments || 0) : 0
+  const monitorFps = monitorTask ? Number(monitorTask.currentFrameRate || 0) : 0
+  const monitorThirdLabel = monitorSegs > 0 ? '分片' : monitorFps > 0 ? '帧率' : '分片'
+  const monitorThirdValue = monitorSegs > 0
+    ? String(monitorSegs)
+    : monitorFps > 0 ? `${monitorFps} fps` : '0'
 
   const getTaskActionMessage = (
     action: '取消' | '重试' | '删除',
@@ -367,61 +362,78 @@ export default function Home() {
       return
     }
 
-    setIsRecording(true)
-    setRecordDuration(0)
-    setRecordSize(0)
-    if (recordTimerRef.current) clearInterval(recordTimerRef.current)
-    recordTimerRef.current = setInterval(() => setRecordDuration((prev) => prev + 1), 1000)
+    if (liveRecordLimit.trim() && parseLiveLimitRaw(liveRecordLimit) < 0) {
+      showToast('error', '录制时长限制格式应为 HH:mm:ss 或 mm:ss')
+      return
+    }
+    const waitRaw = liveWaitTime.trim()
+    if (waitRaw) {
+      const wait = Number(waitRaw)
+      if (!Number.isFinite(wait) || wait < 0) {
+        showToast('error', '刷新间隔必须为非负数字（秒）')
+        return
+      }
+    }
+    const takeRaw = liveTakeCount.trim()
+    const takeCount = Number(takeRaw)
+    if (takeRaw && (!Number.isInteger(takeCount) || takeCount < 1 || takeCount > 100)) {
+      showToast('error', '片段数必须为 1-100 的整数')
+      return
+    }
 
+    // 录制固定使用 MKV 封装：未完成的 MKV 仍可播放，
+    // 规避硬杀进程导致 MP4 缺失 moov atom 而无法播放的问题
     const taskOptions = buildTaskOptions(settings, {
       url: recordUrl.trim(),
       saveName: recordName || extractFileName(recordUrl),
       autoSelect: true,
+      muxFormat: 'mkv',
       liveRealTimeMerge,
       livePipeMux,
       livePerformAsVod,
       liveFixVttByAudio,
-      liveRecordLimit: liveRecordLimit || undefined,
-      liveWaitTime: liveWaitTime ? Number(liveWaitTime) : undefined,
-      liveTakeCount: Number(liveTakeCount) || 16,
+      liveRecordLimit: liveRecordLimit.trim() || undefined,
+      liveWaitTime: waitRaw ? Number(waitRaw) : undefined,
+      liveTakeCount: takeRaw ? takeCount : 16,
     })
 
-    const result = await window.api.download.start(taskOptions)
-    if (!result.success) {
-      showToast('error', `启动失败: ${result.error}`)
-      setIsRecording(false)
-      if (recordTimerRef.current) clearInterval(recordTimerRef.current)
-      return
-    }
+    setRecordStarting(true)
+    try {
+      const result = await window.api.download.start(taskOptions)
+      if (!result.success) {
+        showToast('error', `启动失败: ${result.error}`)
+        return
+      }
 
-    const taskId = result.taskId || generateId()
-    setRecordTaskId(taskId)
-    recordTaskIdRef.current = taskId
-    const task: DownloadTask = {
-      id: taskId,
-      url: recordUrl.trim(),
-      saveName: recordName || extractFileName(recordUrl),
-      saveDir: settings.saveDir,
-      status: 'running',
-      progress: 0,
-      speed: '0 KB/s',
-      downloadedSegments: 0,
-      totalSegments: 0,
-      startTime: new Date().toISOString(),
-      logs: [],
-      options: taskOptions
-    }
+      const taskId = result.taskId || generateId()
+      setRecordTaskId(taskId)
+      recordTaskIdRef.current = taskId
+      const task: DownloadTask = {
+        id: taskId,
+        url: recordUrl.trim(),
+        saveName: recordName || extractFileName(recordUrl),
+        saveDir: settings.saveDir,
+        status: 'running',
+        progress: 0,
+        speed: '0 KB/s',
+        downloadedSegments: 0,
+        totalSegments: 0,
+        startTime: new Date().toISOString(),
+        logs: [],
+        options: taskOptions
+      }
 
-    addTask(task)
-    setActiveTask(taskId)
-    showToast('success', '录制已开始')
+      addTask(task)
+      setActiveTask(taskId)
+      showToast('success', '录制已开始')
+    } finally {
+      setRecordStarting(false)
+    }
   }
 
   const handleRecordStop = async () => {
     if (!recordTaskId) return
     await window.api.download.cancel(recordTaskId)
-    setIsRecording(false)
-    if (recordTimerRef.current) clearInterval(recordTimerRef.current)
     showToast('info', '录制已停止')
   }
 
@@ -705,18 +717,10 @@ export default function Home() {
   const syncTaskRuntimeFlags = () => {
     const liveTasks = useDownloadStore.getState().tasks
     const hasActiveDownload = liveTasks.some((candidate) => !isRecordTask(candidate) && (candidate.status === 'pending' || candidate.status === 'running'))
-    const hasActiveRecord = liveTasks.some((candidate) => isRecordTask(candidate) && (candidate.status === 'pending' || candidate.status === 'running'))
-
     setIsDownloading(hasActiveDownload)
-
-    setIsRecording(hasActiveRecord)
-    if (!hasActiveRecord && recordTimerRef.current) {
-      clearInterval(recordTimerRef.current)
-      recordTimerRef.current = null
-    }
   }
 
-  const deleteTaskArtifactsAndCleanup = async (task: DownloadTask) => {
+  const deleteTaskArtifactsAndCleanup = async (task: DownloadTask, options: { keepHistory?: boolean } = {}) => {
     try {
       const result = await window.api.download.delete(task.id, {
         saveDir: task.saveDir || settings.saveDir,
@@ -731,7 +735,11 @@ export default function Home() {
       removeTask(task.id)
       await window.api.runtime.remove(task.id)
       if (task.id === activeTaskId) setActiveTask(null)
-      await removeRecord(task.id)
+      // 历史语义：仅"删除任务"移除历史记录；"取消任务"保留痕迹，
+      // 由 handleTaskCancel 显式写入一条已取消记录（keepHistory: true）
+      if (!options.keepHistory) {
+        await removeRecord(task.id)
+      }
       syncTaskRuntimeFlags()
       return { success: true, message: '已删除相关下载文件和临时文件' }
     } catch {
@@ -748,17 +756,30 @@ export default function Home() {
         return
       }
 
-      const cleanupResult = await deleteTaskArtifactsAndCleanup(task)
-      updateTask(task.id, {
+      // 取消保留历史痕迹：清理文件与任务列表，但不移除记录
+      const cleanupResult = await deleteTaskArtifactsAndCleanup(task, { keepHistory: true })
+
+      // 显式落一条"已取消"记录：complete 事件与任务清理存在竞速，
+      // 事件侧可能因任务已被移除而跳过写入，这里统一兜底；
+      // store 与主进程的 history:add 均按 id 幂等覆盖，不会产生重复
+      await addRecord({
+        id: task.id,
+        url: task.url,
+        saveName: task.saveName,
         status: 'cancelled',
-        latestLog: cleanupResult.success ? getTaskActionMessage(actionText, 'success', '已删除已下载文件与临时文件') : getTaskActionMessage(actionText, 'success', '已取消，但清理未完全成功')
+        startTime: task.startTime,
+        endTime: new Date().toISOString(),
+        fileSize: Number(task.totalBytes || task.downloadedBytes || 0),
+        outputPath: task.saveDir || task.options?.saveDir || settings.saveDir || '',
+        duration: getTaskRuntimeSeconds(task.startTime)
       })
+
       if (activeTaskId === task.id) {
         setActiveTask(null)
       }
       syncTaskRuntimeFlags()
       showToast('info', cleanupResult.success
-        ? getTaskActionMessage(actionText, 'success', '已删除已下载文件和临时文件')
+        ? getTaskActionMessage(actionText, 'success', '已删除已下载文件和临时文件，记录标记为已取消')
         : getTaskActionMessage(actionText, 'success', '已取消，但部分文件清理失败'))
     } catch {
       showToast('error', getTaskActionMessage(actionText, 'error', '任务未能正常终止，已下载文件未被清理'))
@@ -772,7 +793,9 @@ export default function Home() {
       url: task.url,
       saveName: task.saveName,
       saveDir: task.saveDir || settings.saveDir,
-      tmpDir: task.options?.tmpDir || settings.tmpDir,
+      // 重试一律从全局基目录重新派生隔离临时目录；
+      // 旧任务的 task-<id> 目录已由上方 cleanup 删除，若复用会产生 task-old/task-new 嵌套路径
+      tmpDir: settings.tmpDir,
       customArgs: task.options?.customArgs || settings.customArgs || undefined,
       maxSpeed: task.options?.maxSpeed || settings.maxSpeed || undefined,
       proxy: task.options?.proxy || settings.proxy || undefined,
@@ -837,12 +860,125 @@ export default function Home() {
     setDeleteConfirmTask(task)
   }
 
+  /** 打开任务输出目录 */
+  const openTaskFolder = async (task: DownloadTask) => {
+    const dir = task.saveDir || settings.saveDir
+    if (!dir) {
+      showToast('info', '没有保存位置信息')
+      return
+    }
+    const error = await window.api.shell.openPath(dir)
+    error ? showToast('error', `打开失败: ${error}`) : showToast('success', '已打开所在文件夹')
+  }
+
+  /** 录制任务行：直播录制是开放式过程，用已录时长/体积/速率取代无意义的进度百分比 */
+  const renderRecordRow = (task: DownloadTask) => {
+    const live = task.status === 'running' || task.status === 'pending'
+    const elapsed = getRecordElapsed(task)
+    const limitSeconds = parseLiveLimitSeconds(task)
+    const limitPct = live && limitSeconds > 0 && elapsed !== null
+      ? Math.min(100, (elapsed / limitSeconds) * 100)
+      : 0
+    const captured = Number(task.downloadedBytes || 0)
+
+    return (
+      <div key={task.id} className={`rounded-2xl border p-2.5 shadow-sm ${live ? 'border-red-200 bg-red-50/40' : 'border-slate-200 bg-slate-50/70'}`}>
+        <div className="flex items-start gap-2.5">
+          <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${live ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500'}`}>
+            {live ? (
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+              </span>
+            ) : (
+              <Radio size={13} />
+            )}
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="truncate text-[14px] font-semibold text-slate-800">{task.saveName || task.url}</h3>
+              <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${TASK_STATUS_META[task.status].tone}`}>
+                {live && <span className="h-1.5 w-1.5 rounded-full bg-red-500" />}
+                {task.status === 'running' ? '录制中' : TASK_STATUS_META[task.status].label}
+              </span>
+            </div>
+
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-slate-400">
+              {elapsed !== null ? (
+                <span className="font-mono tabular-nums">已录 {formatDuration(elapsed)}</span>
+              ) : null}
+              {captured > 0 && <span>{formatFileSize(captured)}</span>}
+              {live && task.speed && task.speed !== '0 KB/s' && <span>{task.speed}</span>}
+              <span className="truncate max-w-[260px]" title={task.url}>{task.url}</span>
+            </div>
+
+            {live && limitSeconds > 0 && (
+              <div className="mt-1.5">
+                <div className="h-1 overflow-hidden rounded-full bg-slate-200">
+                  <div className="h-full rounded-full bg-red-500 transition-all" style={{ width: `${limitPct}%` }} />
+                </div>
+                <div className="mt-0.5 flex justify-between text-[9px] text-slate-400">
+                  <span>限额 {task.options?.liveRecordLimit}</span>
+                  <span>剩余 {formatDuration(Math.max(0, limitSeconds - (elapsed ?? 0)))}</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1.5">
+            {live ? (
+              <button
+                // 录制停止必须保留已录内容：直接取消进程，不走会删除产物的 handleTaskCancel
+                onClick={async () => {
+                  await window.api.download.cancel(task.id)
+                  showToast('info', '录制已停止，已录内容已保存')
+                }}
+                className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-medium text-red-600 hover:bg-red-100"
+              >
+                停止
+              </button>
+            ) : (
+              <>
+                {task.saveDir && (
+                  <button
+                    onClick={() => openTaskFolder(task)}
+                    className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 hover:bg-slate-100"
+                  >
+                    打开
+                  </button>
+                )}
+                {task.status === 'failed' && (
+                  <button
+                    onClick={() => handleTaskRetry(task)}
+                    className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-medium text-emerald-700 hover:bg-emerald-100"
+                  >
+                    重试
+                  </button>
+                )}
+                {(task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') && (
+                  <button
+                    onClick={() => openDeleteConfirm(task)}
+                    className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-medium text-red-700 hover:bg-red-100"
+                  >
+                    删除
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const renderTaskRow = (task: DownloadTask, index: number) => {
+    if (isRecordTask(task)) return renderRecordRow(task)
     const progress = Math.min(100, Math.max(0, Number(task.progress) || 0))
     const canCancel = task.status === 'running' || task.status === 'pending'
     const canRetry = task.status === 'failed' || task.status === 'cancelled'
     const canDelete = task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled'
-    const statusText = task.status === 'running' ? '下载中' : statusMap[task.status].label
+    const statusText = task.status === 'running' ? '下载中' : TASK_STATUS_META[task.status].label
 
     return (
       <div key={task.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-2.5 shadow-sm">
@@ -854,7 +990,7 @@ export default function Home() {
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
               <h3 className="truncate text-[14px] font-semibold text-slate-800">{task.saveName || task.url}</h3>
-              <span className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${statusMap[task.status].tone}`}>
+              <span className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${TASK_STATUS_META[task.status].tone}`}>
                 {statusText}
               </span>
             </div>
@@ -1079,8 +1215,8 @@ export default function Home() {
                         <div className="truncate font-medium text-slate-700">{item.saveName}</div>
                         <div className="truncate text-[11px] text-slate-500">{item.url}</div>
                       </div>
-                      <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${item.status === 'completed' ? 'bg-emerald-50 text-emerald-700' : item.status === 'failed' ? 'bg-red-50 text-red-700' : item.status === 'cancelled' ? 'bg-amber-50 text-amber-700' : item.status === 'running' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>
-                        {item.status === 'completed' ? '已完成' : item.status === 'failed' ? '失败' : item.status === 'cancelled' ? '已取消' : item.status === 'running' ? '下载中' : '待处理'}
+                      <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${TASK_STATUS_META[item.status].tone}`}>
+                        {item.status === 'running' ? '下载中' : TASK_STATUS_META[item.status].label}
                       </span>
                     </div>
                   ))}
@@ -1096,16 +1232,16 @@ export default function Home() {
                   <Radio size={15} />
                 </div>
                 <span className="text-sm font-semibold text-slate-800">直播录制入口</span>
-                {isRecording && (
+                {activeRecordCount > 0 && (
                   <span className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-red-50 px-2 py-1 text-[11px] font-medium text-red-600">
-                    <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" /> 录制中
+                    <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" /> 录制中{activeRecordCount > 1 ? ` ×${activeRecordCount}` : ''}
                   </span>
                 )}
               </div>
 
               <div className="space-y-2.5">
-                <input type="text" value={recordUrl} onChange={(e) => setRecordUrl(e.target.value)} placeholder="粘贴直播 m3u8 / mpd 链接..." className="input-field" disabled={isRecording} />
-                <input type="text" value={recordName} onChange={(e) => setRecordName(e.target.value)} placeholder="保存文件名（可选）" className="input-field" disabled={isRecording} />
+                <input type="text" value={recordUrl} onChange={(e) => setRecordUrl(e.target.value)} placeholder="粘贴直播 m3u8 / mpd 链接..." className="input-field" />
+                <input type="text" value={recordName} onChange={(e) => setRecordName(e.target.value)} placeholder="保存文件名（可选）" className="input-field" />
               </div>
 
               <div className="mt-4 flex gap-2">
@@ -1124,51 +1260,142 @@ export default function Home() {
                     { v: liveFixVttByAudio, s: setLiveFixVttByAudio, l: '通过音频修正 VTT' },
                   ].map(({ v, s, l }) => (
                     <label key={l} className="flex cursor-pointer items-center gap-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
-                      <input type="checkbox" checked={v} onChange={(e) => s(e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 text-red-600" disabled={isRecording} />
+                      <input type="checkbox" checked={v} onChange={(e) => s(e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 text-red-600" />
                       {l}
                     </label>
                   ))}
                   <div className="p-2">
                     <label className="mb-1 block text-[11px] text-slate-500">录制时长限制</label>
-                    <input type="text" value={liveRecordLimit} onChange={(e) => setLiveRecordLimit(e.target.value)} placeholder="HH:mm:ss" className="input-field text-sm" disabled={isRecording} />
+                    <input type="text" value={liveRecordLimit} onChange={(e) => setLiveRecordLimit(e.target.value)} placeholder="HH:mm:ss" className="input-field text-sm" />
                   </div>
                   <div className="p-2">
                     <label className="mb-1 block text-[11px] text-slate-500">刷新间隔 (秒)</label>
-                    <input type="number" value={liveWaitTime} onChange={(e) => setLiveWaitTime(e.target.value)} placeholder="自动" className="input-field text-sm" disabled={isRecording} />
+                    <input type="number" value={liveWaitTime} onChange={(e) => setLiveWaitTime(e.target.value)} placeholder="自动" className="input-field text-sm" />
                   </div>
                   <div className="p-2">
                     <label className="mb-1 block text-[11px] text-slate-500">片段数</label>
-                    <input type="number" value={liveTakeCount} onChange={(e) => setLiveTakeCount(e.target.value)} min={1} max={100} className="input-field text-sm" disabled={isRecording} />
+                    <input type="number" value={liveTakeCount} onChange={(e) => setLiveTakeCount(e.target.value)} min={1} max={100} className="input-field text-sm" />
                   </div>
                 </div>
               )}
 
               <div className="mt-4 flex gap-2">
-                <button onClick={handleRecordStart} disabled={isRecording} className="btn-primary flex items-center gap-2 text-sm"><Play size={16} /> {isRecording ? '录制中...' : '开始录制'}</button>
-                <button onClick={handleRecordStop} disabled={!isRecording} className="btn-secondary flex items-center gap-2 text-sm"><Square size={14} /> 停止</button>
+                <button onClick={handleRecordStart} disabled={recordStarting} className="btn-primary flex items-center gap-2 text-sm"><Play size={16} /> {recordStarting ? '启动中...' : '开始录制'}</button>
+                <button onClick={handleRecordStop} disabled={!recordTaskId} className="btn-secondary flex items-center gap-2 text-sm"><Square size={14} /> 停止</button>
               </div>
+              <p className="mt-2 text-[11px] text-slate-400">录制固定使用 MKV 封装：即使程序异常中断，已录内容仍可正常播放。可同时发起多个录制任务。</p>
             </div>
 
             <div className="card p-5">
-              <h3 className="text-base font-semibold text-slate-800">当前状态</h3>
-              <div className="mt-4 grid grid-cols-2 gap-2.5">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400">时长</div>
-                  <div className="mt-2 text-lg font-bold text-slate-800">{formatDuration(recordDuration)}</div>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400">容量</div>
-                  <div className="mt-2 text-lg font-bold text-slate-800">{formatFileSize(recordSize || currentTask?.downloadedBytes || 0)}</div>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400">状态</div>
-                  <div className="mt-2 text-lg font-bold text-slate-800">{isRecording ? '在线' : '空闲'}</div>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400">速率</div>
-                  <div className="mt-2 text-lg font-bold text-slate-800">{(currentTask?.speed || '0 KB/s').replace(/\s+$/, '')}</div>
-                </div>
+              <div className={`mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] ${monitorIsLive ? 'text-red-500' : 'text-slate-400'}`}>
+                <Radio size={12} />
+                {monitorIsLive ? '正在录制' : '录制监控'}
               </div>
+
+              {monitorTask && monitorIsLive ? (
+                <div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <span className="relative flex h-2.5 w-2.5 shrink-0">
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+                        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+                      </span>
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold text-slate-800">{monitorTask.saveName || monitorTask.url}</div>
+                        <div className="truncate text-[11px] text-slate-400">{monitorTask.url}</div>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="font-mono text-2xl font-bold tabular-nums tracking-tight text-slate-900">{formatDuration(monitorElapsed)}</div>
+                      <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400">已录时长</div>
+                    </div>
+                  </div>
+
+                  {monitorLimitSeconds > 0 && (
+                    <div className="mt-3">
+                      <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+                        <div className="h-full rounded-full bg-red-500 transition-all" style={{ width: `${monitorLimitPct}%` }} />
+                      </div>
+                      <div className="mt-1 flex justify-between text-[10px] text-slate-400">
+                        <span>限额 {monitorTask.options?.liveRecordLimit}</span>
+                        <span>剩余 {formatDuration(Math.max(0, monitorLimitSeconds - monitorElapsed))}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-4 grid grid-cols-3 gap-2.5">
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+                      <div className="text-[10px] uppercase tracking-[0.12em] text-slate-400">已捕获</div>
+                      <div className="mt-1 text-sm font-bold text-slate-800">{formatFileSize(Number(monitorTask.downloadedBytes || 0))}</div>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+                      <div className="text-[10px] uppercase tracking-[0.12em] text-slate-400">实时速率</div>
+                      <div className="mt-1 text-sm font-bold text-slate-800">{monitorTask.speed || '0 KB/s'}</div>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+                      <div className="text-[10px] uppercase tracking-[0.12em] text-slate-400">{monitorThirdLabel}</div>
+                      <div className="mt-1 text-sm font-bold text-slate-800">{monitorThirdValue}</div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="min-w-0 truncate text-[11px] text-slate-400" title={monitorTask.saveDir || settings.saveDir}>
+                      保存至 {monitorTask.saveDir || settings.saveDir}
+                    </div>
+                    <button onClick={() => openTaskFolder(monitorTask)}
+                      className="shrink-0 rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 hover:bg-slate-100">
+                      打开
+                    </button>
+                  </div>
+
+                  {monitorTask.latestLog && (
+                    <p className="mt-2 truncate text-[11px] text-slate-400" title={monitorTask.latestLog}>{monitorTask.latestLog}</p>
+                  )}
+
+                  <button
+                    onClick={async () => {
+                      await window.api.download.cancel(monitorTask.id)
+                      showToast('info', '录制已停止，已录内容已保存')
+                    }}
+                    className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-red-500"
+                  >
+                    <Square size={15} /> 停止录制并保存
+                  </button>
+                </div>
+              ) : monitorTask ? (
+                <div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-slate-800">{monitorTask.saveName || monitorTask.url}</div>
+                      <div className="truncate text-[11px] text-slate-400">{monitorTask.url}</div>
+                    </div>
+                    <span className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${TASK_STATUS_META[monitorTask.status].tone}`}>
+                      {TASK_STATUS_META[monitorTask.status].label}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-400">
+                    {Number(monitorTask.downloadedBytes || 0) > 0 && (
+                      <span>录制数据 {formatFileSize(Number(monitorTask.downloadedBytes))}</span>
+                    )}
+                    {monitorTask.latestLog && <span className="truncate">{monitorTask.latestLog}</span>}
+                  </div>
+                  <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="min-w-0 truncate text-[11px] text-slate-400" title={monitorTask.saveDir || settings.saveDir}>
+                      保存至 {monitorTask.saveDir || settings.saveDir}
+                    </div>
+                    <button onClick={() => openTaskFolder(monitorTask)}
+                      className="shrink-0 rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 hover:bg-slate-100">
+                      打开文件夹
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-8 text-center">
+                  <Radio size={28} className="mb-2 text-slate-300" />
+                  <p className="text-sm text-slate-400">暂无进行中的录制</p>
+                  <p className="mt-1 text-xs text-slate-300">在上方粘贴直播链接即可开始录制</p>
+                </div>
+              )}
             </div>
        </div>
       )}

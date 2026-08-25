@@ -47,6 +47,9 @@ export interface ElectronAPI {
   app: {
     getVersion: () => Promise<string>
   }
+  shell: {
+    openPath: (target: string) => Promise<string>
+  }
 }
 
 declare global {

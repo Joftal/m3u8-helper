@@ -293,9 +293,18 @@ function sendProgressEvent(taskId: string, task: DownloadTask, mainWindow: Brows
   })
 }
 
+/** 非负有限数值收敛，非法值回退 0（对齐 IPC 层历史记录净化标准） */
+function toNonNegativeNumber(value: unknown): number {
+  const n = Number(value)
+  return Number.isFinite(n) && n >= 0 ? n : 0
+}
+
 /**
- * 应用启动时调用：上次退出时仍处于运行中的任务进程已随应用结束，
- * 将其标记为失败并注明原因，避免前端出现永远"进行中"的僵尸任务。
+ * 应用启动时调用：
+ * 1. 上次退出时仍处于运行中的任务进程已随应用结束，将其标记为失败并注明原因，
+ *    避免前端出现永远"进行中"的僵尸任务；
+ * 2. 同步为这些中断任务补写失败历史——它们不会经过 complete 事件，
+ *    若不在此处落库，历史页将永远缺失中断痕迹。
  */
 export function interruptOrphanedRuntimeTasks(): void {
   const store = getStore()
@@ -303,16 +312,46 @@ export function interruptOrphanedRuntimeTasks(): void {
   if (!Array.isArray(tasks)) return
 
   let changed = false
+  let historyChanged = false
+  const nowIso = new Date().toISOString()
+  const history: any[] = Array.isArray(store.get('history')) ? store.get('history') : []
+
   for (const task of tasks) {
-    if (task && (task.status === 'running' || task.status === 'pending')) {
-      task.status = 'failed'
-      task.latestLog = '应用重启导致下载中断，可重试继续'
-      changed = true
-    }
+    if (!task || (task.status !== 'running' && task.status !== 'pending')) continue
+
+    task.status = 'failed'
+    task.latestLog = '应用重启导致下载中断，可重试继续'
+    changed = true
+
+    // 补写失败历史（按 id 去重，避免重复中断产生多条）
+    // 字段截断与 ipc-handlers.sanitizeHistoryRecord 保持同一标准
+    const url = typeof task.url === 'string' ? task.url.trim().slice(0, 4096) : ''
+    if (!url || !/^https?:\/\//i.test(url)) continue
+    if (history.some((h) => h?.id === task.id)) continue
+
+    const startIso = typeof task.startTime === 'string' && !Number.isNaN(Date.parse(task.startTime))
+      ? task.startTime
+      : nowIso
+    history.unshift({
+      id: String(task.id ?? '').trim().slice(0, 64),
+      url,
+      saveName: String(task.saveName ?? '').slice(0, 512),
+      status: 'failed',
+      startTime: startIso,
+      endTime: nowIso,
+      fileSize: toNonNegativeNumber(task.downloadedBytes),
+      outputPath: String(task.saveDir ?? '').slice(0, 1024),
+      duration: Math.max(0, Math.floor((Date.now() - Date.parse(startIso)) / 1000))
+    })
+    if (history.length > 500) history.length = 500
+    historyChanged = true
   }
 
   if (changed) {
     store.set('runtimeTasks', tasks)
+  }
+  if (historyChanged) {
+    store.set('history', history)
   }
 }
 

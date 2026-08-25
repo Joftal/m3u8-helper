@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { getDefaultSettings, getStore, resetSettings } from './store'
 import { startDownload, cancelDownload, deleteTaskArtifacts, sanitizeTaskInfo } from './downloader'
 import { addScheduledTask, removeScheduledTask, getScheduledTasks } from './scheduler'
@@ -110,10 +110,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
     }
     const store = getStore()
     const history = store.get('history') || []
-    history.unshift(sanitized)
+    // 幂等写入：同 id 覆盖旧条目，避免取消场景双路写入产生重复记录
+    const deduped = history.filter((h: any) => h?.id !== sanitized.id)
+    deduped.unshift(sanitized)
     // 保留最近 500 条
-    if (history.length > 500) history.length = 500
-    store.set('history', history)
+    if (deduped.length > 500) deduped.length = 500
+    store.set('history', deduped)
     return { success: true }
   })
 
@@ -179,5 +181,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
   // ========== 应用信息 ==========
   ipcMain.handle('app:getVersion', async () => {
     return app.getVersion()
+  })
+
+  // ========== 外部打开 ==========
+  ipcMain.handle('shell:openPath', async (_, target) => {
+    const p = String(target ?? '').trim()
+    // 仅允许绝对路径（历史记录中的保存目录），相对路径一律拒绝
+    if (!/^[a-zA-Z]:[\\/]/.test(p) && !p.startsWith('/')) {
+      return '不支持的路径'
+    }
+    return shell.openPath(p)
   })
 }

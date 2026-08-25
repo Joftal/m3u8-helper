@@ -75,6 +75,11 @@ const api = {
   // 应用信息
   app: {
     getVersion: () => ipcRenderer.invoke('app:getVersion')
+  },
+
+  // 外部打开
+  shell: {
+    openPath: (target: string) => ipcRenderer.invoke('shell:openPath', target)
   }
 }
 
