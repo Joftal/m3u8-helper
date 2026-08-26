@@ -1,24 +1,64 @@
-# m3u8-helper
+<div align="center">
 
-基于 [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) 的桌面端流媒体下载工具，提供简洁的图形界面与更稳定的参数配置入口。
+# 🎬 m3u8-helper
 
-## 功能
+<p>
+  <img src="https://img.shields.io/badge/Electron-35-2b2d30?logo=electron&logoColor=white" alt="Electron" />
+  <img src="https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white" alt="React" />
+  <img src="https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/Windows-11%2B-0078d4?logo=microsoft&logoColor=white" alt="Windows" />
+</p>
 
-- HLS / DASH / MSS 流媒体下载
-- 可配置的工具路径与默认保存目录
-- 下载任务实时进度、速度与日志
-- 下载历史记录
-- 自定义参数扩展入口
-- 任务参数与 CLI 选项保持一致
-- 桌面化的标准工具界面
+<p>
+  <a href="README.md">English</a> | <a href="README.zh-CN.md">中文</a>
+</p>
 
-## 前置要求
+A desktop media downloader built on [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE),
+turning command-line power into a cleaner, calmer, more usable download experience 🚀
 
-1. **Node.js** >= 18
-2. **N_m3u8DL-RE** — 需要准备可执行文件 `N_m3u8DL-RE.exe`
-3. 如需解密功能，还需准备 `ffmpeg` / `mp4decrypt`（按实际需求）
+</div>
 
-## 安装
+<p align="center">
+  <img src="https://images.unsplash.com/photo-1492684223066-81342ee5ff30?auto=format&fit=crop&w=1200&q=80" alt="Video downloader" width="1000" />
+</p>
+
+## ✨ What is this?
+
+`m3u8-helper` is a Windows desktop app for downloading streaming media.
+
+In simple terms:
+
+- paste a link
+- set the options
+- click start
+- monitor speed, logs, and progress in real time
+- recover interrupted work without losing the flow
+
+It wraps the power of a command-line downloader into a desktop app that feels much easier to use every day.
+
+## 🧠 Why it exists
+
+- a unified download parameter entry, so you do not keep tweaking CLI flags
+- real-time task status, including speed, progress, logs, and ETA
+- recovery support for interrupted tasks after app restarts
+- better handling for live recording scenarios with explicit close/quit choices
+- a more complete local workflow for settings, history, and scheduled jobs
+
+## 🏗️ Architecture
+
+```text
+React UI
+   ↓
+Electron IPC
+   ↓
+Main process (download / record / schedule / storage)
+   ↓
+N_m3u8DL-RE + ffmpeg + mp4decrypt
+```
+
+## 🏃 Quick start
+
+### Install
 
 ```bash
 git clone https://github.com/Joftal/m3u8-helper.git
@@ -26,43 +66,61 @@ cd m3u8-helper
 npm install
 ```
 
-## 开发
+### Development
 
 ```bash
 npm run dev
 ```
 
-## 构建
+### Build
 
 ```bash
 npm run build
 ```
 
-## 打包
+### Package
 
 ```bash
 npm run package
 ```
 
-## 使用
+## 🧪 Requirements
 
-1. 启动 `npm run dev`
-2. 进入 **设置**，配置 `N_m3u8DL-RE.exe`、`ffmpeg`、`mp4decrypt` 路径
-3. 配置默认保存目录与参数模板
-4. 返回首页，粘贴 m3u8 / MPD / ISM 链接即可下载
+- Node.js >= 18
+- Windows
+- `N_m3u8DL-RE.exe`
+- for decryption / remuxing: `ffmpeg` / `mp4decrypt`
 
-## 技术栈
+## 📁 Project structure
 
-- Electron
-- React 19 + TypeScript
-- Tailwind CSS
-- Zustand
-- Vite
+```text
+m3u8-helper/
+├── electron/        # main process: download, IPC, task management
+├── src/             # frontend: state and types
+├── resources/       # app icons and assets
+├── README.md
+├── README.zh-CN.md
+├── package.json
+├── electron.vite.config.ts
+├── tsconfig*.json
+└── ...
+```
 
-## 相关项目
+## 💡 How to use
 
-- [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) — 核心下载引擎
+1. Open the app
+2. Configure the `N_m3u8DL-RE` / `ffmpeg` / `mp4decrypt` paths
+3. Set the default save directory
+4. Paste a m3u8 / MPD / ISM link
+5. Click start
+6. Watch the task list for progress, logs, and speed updates
 
-## License
+## 📌 Final thought
 
-MIT
+If you want a streaming download helper that feels more like a real desktop tool than a black-terminal script, `m3u8-helper` is built for that. 😎
+
+---
+
+<p align="center">
+  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="MIT License" />
+</p>
