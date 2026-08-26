@@ -1,10 +1,11 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, nativeImage } from 'electron'
+import { app, BrowserWindow, Menu, dialog, ipcMain, shell, nativeImage } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from '../ipc-handlers'
 import { getStore, initStore } from '../store'
 import { interruptOrphanedRuntimeTasks, countActiveRecordTasks, cancelAllRecordTasks, sweepOrphanedEmptyTmpDirs, setActiveMainWindow } from '../downloader'
 import { initScheduler } from '../scheduler'
+import { startNetworkMonitor, stopNetworkMonitor } from '../network-monitor'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -54,6 +55,17 @@ function createWindow(): void {
 
   if (persistedWindowState.maximized) {
     mainWindow.maximize()
+  }
+
+  // 原生化：移除默认菜单，禁用刷新/DevTools/缩放等浏览器快捷键；触控板捏合缩放一并关闭
+  Menu.setApplicationMenu(null)
+  mainWindow.webContents.setVisualZoomLevelLimits(1, 1)
+  if (is.dev) {
+    mainWindow.webContents.on('before-input-event', (_event, input) => {
+      if (input.type === 'keyDown' && input.key === 'F12') {
+        mainWindow?.webContents.toggleDevTools()
+      }
+    })
   }
 
   mainWindow.on('ready-to-show', () => {
@@ -180,10 +192,15 @@ if (!app.requestSingleInstanceLock()) {
     setActiveMainWindow(mainWindow)
     registerIpcHandlers(mainWindow)
     initScheduler(mainWindow)
+    startNetworkMonitor()
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })
+  })
+
+  app.on('before-quit', () => {
+    stopNetworkMonitor()
   })
 
   app.on('window-all-closed', () => {

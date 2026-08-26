@@ -199,19 +199,17 @@ export function resetSettings(excludedKeys: string[] = []): typeof defaultSettin
   const defaultMap: Record<string, any> = JSON.parse(JSON.stringify(defaultSettings))
   const next: Record<string, any> = { ...defaultMap }
 
-  for (const key of Object.keys(defaultMap)) {
-    if (!exclude.has(key)) {
-      next[key] = defaultMap[key]
-    }
-  }
-
+  // 排除键保留当前值；其余回到默认
   for (const key of exclude) {
     if (current && Object.prototype.hasOwnProperty.call(current, key)) {
       next[key] = current[key]
     }
   }
 
-  data.settings = sanitizeSettings(next) as typeof defaultSettings
+  // 净化可能剔除非法的历史遗留值（如排除键携带旧版脏数据），
+  // 缺失的键必须以默认值补齐，保证 settings 对象形状完整
+  const sanitized = sanitizeSettings(next) as Record<string, any>
+  data.settings = { ...defaultMap, ...sanitized } as typeof defaultSettings
   saveCategory('settings')
   return data.settings
 }

@@ -12,3 +12,4 @@ N_m3u8DL-RE.exe
 .DS_Store
 Thumbs.db
 *.local
+tmp/

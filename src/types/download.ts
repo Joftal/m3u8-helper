@@ -141,6 +141,8 @@ export interface HistoryRecord {
   url: string
   saveName: string
   status: 'completed' | 'failed' | 'cancelled'
+  /** 任务来源类型：录制条目在历史页区分展示，且"再次执行"还原为录制任务 */
+  kind?: 'download' | 'record'
   startTime: string
   endTime: string
   fileSize: number

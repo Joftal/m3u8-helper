@@ -23,7 +23,8 @@ export function buildTaskOptions(settings: AppSettings, overrides: Partial<Downl
     concurrentDownload: settings.concurrentDownload,
     useSystemProxy: settings.useSystemProxy,
     proxy: settings.proxy || undefined,
-    headers: Object.keys(settings.headers).length > 0 ? settings.headers : undefined,
+    // 防御式判空：settings 对象形状由加载/重置链路保证完整，此处兜底避免历史路径下的 undefined 崩溃
+    headers: settings.headers && Object.keys(settings.headers).length > 0 ? settings.headers : undefined,
     logLevel: settings.logLevel,
     decryptionEngine: settings.decryptionEngine,
     downloadRetryCount: settings.downloadRetryCount,

@@ -30,10 +30,10 @@ export default function Toast() {
   }, [])
 
   const icons = {
-    success: <CheckCircle size={16} className="text-emerald-500" />,
-    error: <AlertCircle size={16} className="text-red-500" />,
-    info: <Info size={16} className="text-primary-500" />,
-    warning: <AlertTriangle size={16} className="text-amber-500" />
+    success: <CheckCircle size={16} className="text-emerald-500 dark:text-emerald-400" />,
+    error: <AlertCircle size={16} className="text-red-500 dark:text-red-400" />,
+    info: <Info size={16} className="text-primary-500 dark:text-primary-400" />,
+    warning: <AlertTriangle size={16} className="text-amber-500 dark:text-amber-400" />
   }
 
   return (
@@ -45,14 +45,14 @@ export default function Toast() {
             initial={{ opacity: 0, y: -12, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -12, scale: 0.97 }}
-            className="bg-white px-4 py-3 rounded-lg border border-gray-100 flex items-center gap-3 min-w-[260px] max-w-[420px]"
+            className="bg-white dark:bg-neutral-900 px-4 py-3 rounded-lg border border-gray-100 dark:border-gray-700/60 flex items-center gap-3 min-w-[260px] max-w-[420px]"
             style={{ boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
           >
             {icons[toast.type]}
-            <span className="text-sm text-gray-700 flex-1">{toast.message}</span>
+            <span className="text-sm text-gray-700 dark:text-gray-200 flex-1">{toast.message}</span>
             <button
               onClick={() => setToasts((prev) => prev.filter((t) => t.id !== toast.id))}
-              className="text-gray-400 hover:text-gray-600 transition-colors"
+              className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
             >
               <X size={14} />
             </button>

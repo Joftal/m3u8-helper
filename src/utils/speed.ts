@@ -20,18 +20,4 @@ export function formatNetworkSpeed(bytesPerSecond: number): string {
   return `${value.toFixed(precision)} ${units[unitIndex]}`
 }
 
-/** 解析 "1.5 MB/s" / "800KBps" 类速度字符串为字节速率，无法解析时返回 0 */
-export function parseSpeedToBytesPerSecond(raw: string): number {
-  const match = raw.match(/([\d.]+)\s*(B\/s|KB\/s|MB\/s|GB\/s|Bps|KBps|MBps|GBps)/i)
-  if (!match) return 0
 
-  const value = Number(match[1]) || 0
-  const unit = match[2].toLowerCase().replace(/ps$/, '/s')
-  const base: Record<string, number> = {
-    'b/s': 1,
-    'kb/s': 1024,
-    'mb/s': 1024 * 1024,
-    'gb/s': 1024 * 1024 * 1024
-  }
-  return value * (base[unit] ?? 1)
-}

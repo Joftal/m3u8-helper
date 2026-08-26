@@ -70,7 +70,7 @@ interface SettingsStore {
   resetSettings: () => Promise<void>
 }
 
-export const useSettingsStore = create<SettingsStore>((set) => ({
+export const useSettingsStore = create<SettingsStore>((set, get) => ({
   settings: defaultSettings,
   loaded: false,
   loadSettings: async () => {
@@ -88,14 +88,31 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
     const result = validateSettingValue(key, value)
     if (!result.valid) return
 
+    const previous = get().settings[key]
     set((state) => ({ settings: { ...state.settings, [key]: result.value } }))
-    await window.api.settings.set(key, result.value)
+    try {
+      const res = await window.api.settings.set(key, result.value)
+      if (!res?.success) throw new Error(res?.error || 'persist failed')
+    } catch {
+      // 持久化失败：回滚乐观值，避免界面与磁盘长期分叉
+      set((state) => ({ settings: { ...state.settings, [key]: previous } }))
+    }
   },
   updateSettings: async (updates) => {
     const sanitized = validateSettings(updates as unknown as Record<string, unknown>).settings as unknown as Partial<AppSettings>
+    const entries = Object.entries(sanitized)
+    if (entries.length === 0) return
+
+    const previous = get().settings
     set((state) => ({ settings: { ...state.settings, ...sanitized } }))
-    for (const [key, value] of Object.entries(sanitized)) {
-      await window.api.settings.set(key, value)
+    for (const [key, value] of entries) {
+      try {
+        const res = await window.api.settings.set(key, value)
+        if (!res?.success) throw new Error(res?.error || 'persist failed')
+      } catch {
+        // 批量写入中失败的键定向回滚到批前值，成功的键保留
+        set((state) => ({ settings: { ...state.settings, [key]: (previous as unknown as Record<string, unknown>)[key] } }))
+      }
     }
   },
   resetSettings: async () => {
@@ -103,7 +120,8 @@ export const useSettingsStore = create<SettingsStore>((set) => ({
     const result = await window.api.settings.resetAll([...resetExcludedKeys])
     if (result?.success && result.settings) {
       const sanitized = validateSettings(result.settings as unknown as Record<string, unknown>).settings as unknown as AppSettings
-      set({ settings: sanitized, loaded: true })
+      // 剔除式净化可能缺少个别键，合并默认值保证形状完整
+      set({ settings: { ...defaultSettings, ...sanitized }, loaded: true })
     }
   }
 }))

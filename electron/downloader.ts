@@ -377,6 +377,41 @@ function notifyRecordFinished(task: DownloadTask & Record<string, any>): void {
 }
 
 /**
+ * 主进程侧为已取消的录制任务兜底写入历史。
+ *
+ * 通过退出拦截停止的录制发生在窗口销毁前后，渲染端的 addRecord 可能永远无法完成；
+ * 且 finalizeTask 已把任务移出 runtime 快照，下次启动的孤儿恢复也无法补写——
+ * 若不在此处落库，这类记录将彻底丢失。按 id 幂等：渲染端存活时其随后写入
+ * 会覆盖同一条目（内容一致），不会产生重复。
+ */
+function upsertCancelledRecordHistory(taskId: string, task: DownloadTask & Record<string, any>): void {
+  try {
+    const store = getStore()
+    const history: any[] = Array.isArray(store.get('history')) ? store.get('history') : []
+    if (history.some((h) => h?.id === taskId)) return
+
+    const startIso = task.startTime instanceof Date ? task.startTime.toISOString() : String(task.startTime ?? '')
+    const startMs = Date.parse(startIso)
+    history.unshift({
+      id: taskId,
+      url: String(task.url ?? ''),
+      saveName: String((task as any).saveName ?? ''),
+      status: 'cancelled',
+      kind: 'record',
+      startTime: startIso,
+      endTime: new Date().toISOString(),
+      fileSize: toNonNegativeNumber((task as any).totalBytes || task.downloadedBytes),
+      outputPath: String((task as any).saveDir ?? ''),
+      duration: Number.isFinite(startMs) ? Math.max(0, Math.floor((Date.now() - startMs) / 1000)) : 0
+    })
+    if (history.length > 500) history.length = 500
+    store.set('history', history)
+  } catch {
+    // 历史兜底属尽力而为，失败不影响收尾主流程
+  }
+}
+
+/**
  * 任务统一收尾：状态判定 → 通知渲染进程 → 清理产物与定时器 → 移除条目。
  *
  * 所有退出路径（正常 close / 进程错误 / 无进程取消）都收敛到这里，
@@ -442,6 +477,9 @@ function finalizeTask(taskId: string, exitCode: number | null): void {
   // 非优雅收尾的录制任务：CLI 的收尾混流（TS→MKV）不会执行，由 GUI 补做转封装。
   // completed 状态 CLI 已产出正式 MKV；多分片场景逐个转换，失败保留源 TS。
   if (isRecordTask && (task.status === 'cancelled' || task.status === 'failed')) {
+    if (task.status === 'cancelled') {
+      upsertCancelledRecordHistory(taskId, task)
+    }
     scheduleRemux(taskId, (task as any).saveDir, (task as any).saveName)
   }
 
@@ -498,10 +536,16 @@ async function getDirectorySizeAsync(target: string): Promise<number> {
 }
 
 /**
- * 统计本任务可归属的磁盘体积：
- * - 自有临时目录 tmp/task-<taskId> 整体递归（P0 隔离改造后天然按任务划分）
- * - saveDir 顶层中文件名包含保存名词干的合并产物文件
- * 并发任务共享同一保存目录时不再互相计入对方增长，速度不再虚高。
+ * 统计本任务可归属的磁盘体积（速度口径 = 网络流入近似）：
+ * - 临时目录 tmp/task-<taskId> 整体递归：分片下载的写入即网络接收
+ * - 录制任务额外统计 saveDir 中以保存名词干命名的实时合并产物
+ *   （直播实时合并的 .ts 增长同样是网络流入）
+ *
+ * 下载任务刻意不计 saveDir：合并阶段 CLI「读 tmp 分片 + 写成品」属于
+ * 本地磁盘操作，计入会把混流写盘冒充成网速；排除后合并期速率自然归零
+ * （此时网络确已完成，0 才是正确语义）。
+ *
+ * 带边界文件名匹配：并发任务共享同一保存目录时互不串算。
  */
 async function getTaskAttributableBytes(task: DownloadTask & Record<string, any>): Promise<number> {
   let total = 0
@@ -510,6 +554,9 @@ async function getTaskAttributableBytes(task: DownloadTask & Record<string, any>
   if (tmpDir && tmpDir.trim()) {
     total += await getDirectorySizeAsync(tmpDir.trim())
   }
+
+  // 下载任务到此为止：成品合并是本地磁盘操作，与网速无关
+  if (!isRecordTaskOptions(task.options)) return total
 
   const saveDir: string = task.saveDir || task.options?.saveDir || ''
   const saveName: string = task.saveName || task.options?.saveName || ''
@@ -650,6 +697,7 @@ export function interruptOrphanedRuntimeTasks(): void {
       url,
       saveName: String(task.saveName ?? '').slice(0, 512),
       status: 'failed',
+      kind: isRecordTaskOptions(task.options) ? 'record' : 'download',
       startTime: startIso,
       endTime: nowIso,
       fileSize: toNonNegativeNumber(task.downloadedBytes),
@@ -915,6 +963,8 @@ export function countActiveRecordTasks(): number {
   }
   return count
 }
+
+
 
 /**
  * 取消全部活跃录制任务（应用退出前的收尾路径）。

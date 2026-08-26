@@ -23,7 +23,7 @@ export interface ElectronAPI {
     onRemuxDone: (callback: (data: { taskId: string; outputs: string[]; attempted: number }) => void) => () => void
   }
   settings: {
-    set: (key: string, value: any) => Promise<{ success: boolean }>
+    set: (key: string, value: any) => Promise<{ success: boolean; error?: string }>
     getAll: () => Promise<any>
     getDefaults: () => Promise<any>
     resetAll: (excludedKeys?: string[]) => Promise<{ success: boolean; settings?: any }>
@@ -47,6 +47,10 @@ export interface ElectronAPI {
     openDir: () => Promise<string | null>
     openFile: (filters?: any[]) => Promise<string | null>
   }
+  network: {
+    /** 系统网络吞吐 B/s（下行/上行） */
+    onStats: (callback: (data: { down: number; up: number }) => void) => () => void
+  },
   app: {
     getVersion: () => Promise<string>
   }

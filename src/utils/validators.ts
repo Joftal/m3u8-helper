@@ -6,7 +6,8 @@ function isValidHttpUrl(value: string): boolean {
   if (!value) return true
   try {
     const url = new URL(value)
-    return ['http:', 'https:', 'socks:', 'socks4:', 'socks5:'].includes(url.protocol)
+    // 必须携带主机名：裸协议（如「socks:」）可被 URL 解析但不是可用地址
+    return ['http:', 'https:', 'socks:', 'socks4:', 'socks5:'].includes(url.protocol) && url.hostname !== ''
   } catch {
     return false
   }
@@ -162,7 +163,9 @@ export function validateSettingValue(key: string, value: unknown): { valid: bool
 
 export function validateSettings<T extends Record<string, unknown>>(settings: T): { valid: boolean; settings: T; errors: string[] } {
   const errors: string[] = []
-  const next = { ...settings } as T
+  // 从零构建而非浅拷贝：非法/未知键直接剔除，
+  // 调用方以 {...defaults, ...result.settings} 合并时自动回落默认值
+  const next = {} as T
 
   for (const [key, value] of Object.entries(settings)) {
     const result = validateSettingValue(key, value)
@@ -176,7 +179,7 @@ export function validateSettings<T extends Record<string, unknown>>(settings: T)
   return { valid: errors.length === 0, settings: next, errors }
 }
 
-/** 静默净化：等价于 validateSettings 但不收集错误，非法键保留原值 */
+/** 静默净化：等价于 validateSettings 但不收集错误；非法/未知键被剔除而非保留 */
 export function sanitizeSettings<T extends Record<string, unknown>>(settings: T): T {
   return validateSettings(settings).settings
 }

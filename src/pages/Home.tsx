@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
+import { useLocation } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import {
   ChevronDown,
   ChevronUp,
   Clipboard,
-  FileText,
-  Link,
+
+
   Play,
-  Radio,
+
   Settings2,
   Trash2,
   Upload,
@@ -19,7 +20,7 @@ import Modal from '@/components/Modal'
 import { showToast } from '@/components/Toast'
 import { extractFileName, extractUrlHost, formatDuration, formatFileSize, generateId } from '@/utils/format'
 import { isValidUrl } from '@/utils/validators'
-import { TASK_STATUS_META } from '@/utils/status'
+import { TASK_STATUS_META, STATUS_ICON_META } from '@/utils/status'
 import { formatNetworkSpeed } from '@/utils/speed'
 import { buildTaskOptions } from '@/utils/taskOptions'
 import {
@@ -50,7 +51,11 @@ function getTaskRuntimeSeconds(startTime?: string): number {
 }
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<'download' | 'record'>('download')
+  const location = useLocation()
+  // 支持跨页跳转直达指定页签（如历史页"再次执行"录制条目 → 录制 Tab）
+  const [activeTab, setActiveTab] = useState<'download' | 'record'>(() =>
+    (location.state as { tab?: 'download' | 'record' } | null)?.tab === 'record' ? 'record' : 'download'
+  )
 
   const [downloadUrl, setDownloadUrl] = useState('')
   const [downloadName, setDownloadName] = useState('')
@@ -179,6 +184,7 @@ export default function Home() {
           url: task.url,
           saveName: task.saveName,
           status: data.status === 'completed' ? 'completed' : data.status === 'cancelled' ? 'cancelled' : 'failed',
+          kind: isRecordTask(task) ? 'record' : 'download',
           startTime: task.startTime,
           endTime: new Date().toISOString(),
           fileSize: Number(task.totalBytes || task.downloadedBytes || 0),
@@ -789,6 +795,7 @@ export default function Home() {
         url: task.url,
         saveName: task.saveName,
         status: 'cancelled',
+        kind: 'download',
         startTime: task.startTime,
         endTime: new Date().toISOString(),
         fileSize: Number(task.totalBytes || task.downloadedBytes || 0),
@@ -917,46 +924,40 @@ export default function Home() {
     const host = extractUrlHost(task.url)
 
     return (
-      <div key={task.id} className={`rounded-2xl border p-3 shadow-sm ${live ? 'border-red-200 bg-red-50/40' : 'border-slate-200 bg-slate-50/70'}`}>
+      <div key={task.id} className={`rounded-2xl border p-3 shadow-sm ${live ? 'border-red-200 dark:border-red-500/20 bg-red-50/40 dark:bg-red-500/10' : 'border-slate-200 dark:border-neutral-800 bg-slate-50/70 dark:bg-neutral-800/50'}`}>
         <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${live ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500'}`}>
-              {live ? (
-                <span className="relative flex h-2.5 w-2.5">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <h3 className="truncate text-[14px] font-semibold text-slate-800 dark:text-neutral-100" title={task.url}>{task.saveName || host || task.url}</h3>
+              {!live && (
+                <span
+                  title={TASK_STATUS_META[task.status].label}
+                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center"
+                >
+                  {(() => {
+                    const Meta = STATUS_ICON_META[task.status]
+                    return <Meta.Icon size={14} className={`${Meta.className}${Meta.spin ? ' animate-spin' : ''}`} />
+                  })()}
                 </span>
-              ) : (
-                <Radio size={13} />
               )}
             </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <h3 className="truncate text-[14px] font-semibold text-slate-800" title={task.url}>{task.saveName || host || task.url}</h3>
-                {!live && (
-                  <span className={`inline-flex shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${TASK_STATUS_META[task.status].tone}`}>
-                    {TASK_STATUS_META[task.status].label}
-                  </span>
-                )}
-              </div>
-              {host && <p className="truncate text-[11px] text-slate-400" title={task.url}>{host}</p>}
-            </div>
+            {host && <p className="truncate text-[11px] text-slate-500 dark:text-neutral-400" title={task.url}>{host}</p>}
           </div>
 
           {live && (
             <div className="shrink-0 text-right">
-              <div className="font-mono text-xl font-bold tabular-nums tracking-tight text-slate-900">{formatDuration(elapsed ?? 0)}</div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-red-500">录制中</div>
+              <div className="font-mono text-xl font-bold tabular-nums tracking-tight text-slate-900 dark:text-neutral-50">{formatDuration(elapsed ?? 0)}</div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-red-500 dark:text-red-400">录制中</div>
             </div>
           )}
         </div>
 
         {live && limitSeconds > 0 && (
           <div className="mt-2">
-            <div className="h-1 overflow-hidden rounded-full bg-slate-200">
+            <div className="h-1 overflow-hidden rounded-full bg-slate-200 dark:bg-neutral-700">
               <div className="h-full rounded-full bg-red-500 transition-all" style={{ width: `${limitPct}%` }} />
             </div>
-            <div className="mt-0.5 flex justify-between text-[10px] text-slate-400">
+            <div className="mt-0.5 flex justify-between text-[10px] text-slate-500 dark:text-neutral-400">
               <span>限额 {task.options?.liveRecordLimit}</span>
               {/* CLI 从真正拉流才开始计时限额，UI 计时到限不代表录制已结束 */}
               <span>{remaining > 0 ? `剩余 ${formatDuration(remaining)}` : '已达时限，等待录制收尾…'}</span>
@@ -964,7 +965,7 @@ export default function Home() {
           </div>
         )}
 
-        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-0.5 font-mono text-[11px] tabular-nums text-slate-500">
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-0.5 font-mono text-[11px] tabular-nums text-slate-500 dark:text-neutral-400">
           {captured > 0 && <span>已捕获 {formatFileSize(captured)}</span>}
           {live && task.speed && task.speed !== '0 KB/s' && <span>实时 {task.speed}</span>}
           {avgSpeed && <span>平均 {avgSpeed}</span>}
@@ -974,33 +975,33 @@ export default function Home() {
           )}
         </div>
 
-        <div className="mt-2.5 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white/70 px-3 py-1.5">
-          <div className="min-w-0 truncate text-[11px] text-slate-400" title={task.saveDir || settings.saveDir}>
+        <div className="mt-2.5 flex items-center justify-between gap-3 rounded-xl border border-slate-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-900/60 bg-white dark:bg-neutral-900 px-3 py-1.5">
+          <div className="min-w-0 truncate text-[11px] text-slate-500 dark:text-neutral-400" title={task.saveDir || settings.saveDir}>
             保存至 {task.saveDir || settings.saveDir || '默认下载目录'}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {(task.saveDir || settings.saveDir) && (
               <button onClick={() => openTaskFolder(task)}
-                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 hover:bg-slate-100">
+                className="rounded-md border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-2 py-1 text-[10px] font-medium text-slate-300 dark:text-neutral-600 hover:bg-slate-100 dark:hover:bg-neutral-800">
                 打开
               </button>
             )}
             {live ? (
               // 录制停止必须保留已录内容：直接取消进程，不走会删除产物的 handleTaskCancel
               <button onClick={() => stopRecording(task.id)} disabled={isCancelling}
-                className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-[10px] font-semibold text-red-600 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60">
+                className="rounded-md border border-red-200 dark:border-red-500/20 bg-red-50/40 dark:bg-red-500/10 px-2.5 py-1 text-[10px] font-semibold text-red-500 dark:text-red-400 disabled:cursor-not-allowed disabled:opacity-60">
                 {isCancelling ? '停止中…' : '停止'}
               </button>
             ) : (
               <>
                 {task.status === 'failed' && (
                   <button onClick={() => requestRetry(task)}
-                    className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-medium text-emerald-700 hover:bg-emerald-100">
+                    className="rounded-md border border-emerald-200 dark:border-emerald-500/20 bg-emerald-50 dark:bg-emerald-500/10 px-2 py-1 text-[10px] font-medium text-emerald-500 dark:text-emerald-400">
                     重试
                   </button>
                 )}
                 <button onClick={() => openDeleteConfirm(task)}
-                  className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-medium text-red-700 hover:bg-red-100">
+                  className="rounded-md border border-red-200 dark:border-red-500/20 bg-red-50/40 dark:bg-red-500/10 px-2 py-1 text-[10px] font-medium text-red-500 dark:text-red-400">
                   删除
                 </button>
               </>
@@ -1011,37 +1012,34 @@ export default function Home() {
     )
   }
 
-  const renderTaskRow = (task: DownloadTask, index: number) => {
+  const renderTaskRow = (task: DownloadTask) => {
     if (isRecordTask(task)) return renderRecordCard(task)
     const progress = Math.min(100, Math.max(0, Number(task.progress) || 0))
     const canCancel = task.status === 'running' || task.status === 'pending'
     const canRetry = task.status === 'failed' || task.status === 'cancelled'
     const canDelete = task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled'
     const statusText = task.status === 'running' ? '下载中' : TASK_STATUS_META[task.status].label
+    const StatusIcon = STATUS_ICON_META[task.status]
 
     return (
-      <div key={task.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-2.5 shadow-sm">
+      <div key={task.id} className="rounded-2xl border border-slate-200 dark:border-neutral-800 bg-slate-50/70 dark:bg-neutral-800/50 p-2.5 shadow-sm">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-[11px] font-bold text-slate-600">
-            {index + 1}
-          </div>
-
           <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="truncate text-[14px] font-semibold text-slate-800">{task.saveName || task.url}</h3>
-              <span className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${TASK_STATUS_META[task.status].tone}`}>
-                {statusText}
+            <div className="flex items-center gap-1.5">
+              <h3 className="truncate text-[14px] font-semibold text-slate-800 dark:text-neutral-100">{task.saveName || task.url}</h3>
+              <span title={statusText} className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
+                <StatusIcon.Icon size={14} className={`${StatusIcon.className}${StatusIcon.spin ? ' animate-spin' : ''}`} />
               </span>
             </div>
 
             <div className="mt-1.5 flex items-center gap-2">
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-200">
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-200 dark:bg-neutral-700">
                 <div
                   className={`h-full rounded-full ${task.status === 'completed' ? 'bg-emerald-500' : task.status === 'failed' ? 'bg-red-500' : task.status === 'cancelled' ? 'bg-amber-500' : 'bg-blue-500'}`}
                   style={{ width: `${progress}%` }}
                 />
               </div>
-              <span className="text-[10px] font-medium text-slate-500">{Math.round(progress)}%</span>
+              <span className="text-[10px] font-medium text-slate-500 dark:text-neutral-400">{Math.round(progress)}%</span>
             </div>
           </div>
 
@@ -1049,21 +1047,21 @@ export default function Home() {
             <button
               onClick={() => canCancel && handleTaskCancel(task)}
               disabled={!canCancel}
-              className={`rounded-md border px-2 py-1 text-[10px] font-medium ${canCancel ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100' : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'}`}
+              className={`rounded-md border px-2 py-1 text-[10px] font-medium ${canCancel ? 'border-amber-200 dark:border-amber-500/20 bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-500/20' : 'cursor-not-allowed border-slate-200 dark:border-neutral-800 bg-slate-100 dark:bg-neutral-800 text-slate-400 dark:text-neutral-500'}`}
             >
               取消
             </button>
             <button
               onClick={() => canRetry && requestRetry(task)}
               disabled={!canRetry}
-              className={`rounded-md border px-2 py-1 text-[10px] font-medium ${canRetry ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'}`}
+              className={`rounded-md border px-2 py-1 text-[10px] font-medium ${canRetry ? 'border-emerald-200 dark:border-emerald-500/20 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-500/20' : 'cursor-not-allowed border-slate-200 dark:border-neutral-800 bg-slate-100 dark:bg-neutral-800 text-slate-400 dark:text-neutral-500'}`}
             >
               重试
             </button>
             <button
               onClick={() => canDelete && openDeleteConfirm(task)}
               disabled={!canDelete}
-              className={`rounded-md border px-2 py-1 text-[10px] font-medium ${canDelete ? 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100' : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'}`}
+              className={`rounded-md border px-2 py-1 text-[10px] font-medium ${canDelete ? 'border-red-200 dark:border-red-500/20 bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20' : 'cursor-not-allowed border-slate-200 dark:border-neutral-800 bg-slate-100 dark:bg-neutral-800 text-slate-400 dark:text-neutral-500'}`}
             >
               删除
             </button>
@@ -1077,12 +1075,12 @@ export default function Home() {
     <div className="flex flex-1 flex-col gap-6">
       <Modal open={Boolean(deleteConfirmTask)} onClose={() => setDeleteConfirmTask(null)} title="删除任务" width="max-w-md">
         <div className="space-y-4">
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">任务名称</div>
-            <div className="mt-1 truncate text-sm font-semibold text-slate-700">{deleteConfirmTask?.saveName || deleteConfirmTask?.url || ''}</div>
+          <div className="rounded-xl border border-slate-200 dark:border-neutral-800 bg-slate-50 dark:bg-neutral-800/60 px-3 py-2.5">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-neutral-400">任务名称</div>
+            <div className="mt-1 truncate text-sm font-semibold text-slate-700 dark:text-neutral-200">{deleteConfirmTask?.saveName || deleteConfirmTask?.url || ''}</div>
           </div>
 
-          <p className="text-sm leading-6 text-slate-600">
+          <p className="text-sm leading-6 text-slate-300 dark:text-neutral-600">
             删除后将同时清理{isRecordTask(deleteConfirmTask) ? '已录制的视频文件' : '已下载文件'}、临时文件和相关缓存内容
             {deleteConfirmTask && Number(deleteConfirmTask.downloadedBytes || 0) > 0
               ? `（约 ${formatFileSize(Number(deleteConfirmTask.downloadedBytes))}）`
@@ -1093,13 +1091,13 @@ export default function Home() {
           <div className="flex items-center justify-end gap-2 pt-1">
             <button
               onClick={() => setDeleteConfirmTask(null)}
-              className="rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+              className="rounded-lg border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3.5 py-2 text-sm font-medium text-slate-300 dark:text-neutral-600 transition hover:bg-slate-100 dark:hover:bg-neutral-800 hover:bg-slate-50 dark:hover:bg-neutral-800/60"
             >
               取消
             </button>
             <button
               onClick={() => deleteConfirmTask && handleTaskDelete(deleteConfirmTask)}
-              className="rounded-lg border border-red-200 bg-red-600 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-red-500"
+              className="rounded-lg border border-red-200 dark:border-red-500/20 bg-red-600 px-3.5 py-2 text-sm font-medium text-white transition"
             >
               确认删除
             </button>
@@ -1109,12 +1107,12 @@ export default function Home() {
 
       <Modal open={Boolean(retryConfirmTask)} onClose={() => setRetryConfirmTask(null)} title="重试录制任务" width="max-w-md">
         <div className="space-y-4">
-          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">任务名称</div>
-            <div className="mt-1 truncate text-sm font-semibold text-slate-700">{retryConfirmTask?.saveName || retryConfirmTask?.url || ''}</div>
+          <div className="rounded-xl border border-slate-200 dark:border-neutral-800 bg-slate-50 dark:bg-neutral-800/60 px-3 py-2.5">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-neutral-400">任务名称</div>
+            <div className="mt-1 truncate text-sm font-semibold text-slate-700 dark:text-neutral-200">{retryConfirmTask?.saveName || retryConfirmTask?.url || ''}</div>
           </div>
 
-          <p className="text-sm leading-6 text-slate-600">
+          <p className="text-sm leading-6 text-slate-300 dark:text-neutral-600">
             重试将删除本次已录制的内容
             {retryConfirmTask && Number(retryConfirmTask.downloadedBytes || 0) > 0
               ? `（约 ${formatFileSize(Number(retryConfirmTask.downloadedBytes))}）`
@@ -1125,7 +1123,7 @@ export default function Home() {
           <div className="flex items-center justify-end gap-2 pt-1">
             <button
               onClick={() => setRetryConfirmTask(null)}
-              className="rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+              className="rounded-lg border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3.5 py-2 text-sm font-medium text-slate-300 dark:text-neutral-600 transition hover:bg-slate-100 dark:hover:bg-neutral-800 hover:bg-slate-50 dark:hover:bg-neutral-800/60"
             >
               取消
             </button>
@@ -1135,7 +1133,7 @@ export default function Home() {
                 setRetryConfirmTask(null)
                 if (target) performRetry(target)
               }}
-              className="rounded-lg border border-emerald-200 bg-emerald-600 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-emerald-500"
+              className="rounded-lg border border-emerald-200 dark:border-emerald-500/20 bg-emerald-600 px-3.5 py-2 text-sm font-medium text-white transition"
             >
               删除并重新录制
             </button>
@@ -1145,23 +1143,23 @@ export default function Home() {
 
       <div className="flex items-start justify-between gap-4">
         <div>
-          <div className="text-[11px] font-bold tracking-[0.18em] text-slate-500 uppercase">Overview</div>
-          <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">任务总览</h1>
+          <div className="text-[11px] font-bold tracking-[0.18em] text-slate-500 dark:text-neutral-400 uppercase">Overview</div>
+          <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900 dark:text-neutral-50">任务总览</h1>
         </div>
         <div className="flex items-center gap-2" />
       </div>
 
       <div className="flex justify-center">
-        <div className="w-full max-w-[340px] rounded-2xl border border-slate-200 bg-white p-1.5 shadow-sm">
-          <div className="inline-flex w-full rounded-xl bg-slate-100 p-1">
+        <div className="w-full max-w-[340px] rounded-2xl border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-1.5 shadow-sm">
+          <div className="inline-flex w-full rounded-xl bg-slate-100 dark:bg-neutral-800 p-1">
             <button
-              className={`flex-1 rounded-lg px-4 py-2 text-sm font-medium transition ${activeTab === 'download' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'}`}
+              className={`flex-1 rounded-lg px-4 py-2 text-sm font-medium transition ${activeTab === 'download' ? 'bg-white dark:bg-neutral-900 text-blue-700 dark:text-blue-300 shadow-sm' : 'text-slate-500 dark:text-neutral-400'}`}
               onClick={() => setActiveTab('download')}
             >
               下载任务
             </button>
             <button
-              className={`flex-1 rounded-lg px-4 py-2 text-sm font-medium transition ${activeTab === 'record' ? 'bg-white text-red-600 shadow-sm' : 'text-slate-500'}`}
+              className={`flex-1 rounded-lg px-4 py-2 text-sm font-medium transition ${activeTab === 'record' ? 'bg-white dark:bg-neutral-900 text-red-600 dark:text-red-400 shadow-sm' : 'text-slate-500 dark:text-neutral-400'}`}
               onClick={() => setActiveTab('record')}
             >
               录制任务
@@ -1174,10 +1172,8 @@ export default function Home() {
         <div className="space-y-6">
             <div className="card p-5">
               <div className="flex items-center gap-2 mb-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
-                  <Link size={15} />
-                </div>
-                <span className="text-sm font-semibold text-slate-800">下载入口</span>
+                <span className="text-2xl leading-none">📥</span>
+                <span className="text-sm font-semibold text-slate-800 dark:text-neutral-100">下载入口</span>
               </div>
 
               <div className="flex gap-2">
@@ -1203,7 +1199,7 @@ export default function Home() {
               />
 
               <div className="mt-4 flex items-center justify-between gap-2">
-                <button onClick={() => setShowDownloadAdvanced(!showDownloadAdvanced)} className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 transition-colors">
+                <button onClick={() => setShowDownloadAdvanced(!showDownloadAdvanced)} className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-neutral-400 hover:text-slate-700 dark:hover:text-slate-200 text-slate-700 dark:text-neutral-200 transition-colors">
                   <Settings2 size={13} /> 高级选项 {showDownloadAdvanced ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                 </button>
                 <div className="flex gap-2">
@@ -1216,29 +1212,29 @@ export default function Home() {
               {showDownloadAdvanced && (
                 <div className="mt-4 grid grid-cols-2 gap-2.5">
                   <div className="p-2">
-                    <label className="mb-1 block text-[11px] text-slate-500">线程数</label>
+                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400">线程数</label>
                     <input type="number" value={downloadThreadCount} onChange={(e) => setDownloadThreadCount(Number(e.target.value) || 8)} className="input-field text-sm" min={1} max={64} />
                   </div>
                   <div className="p-2">
-                    <label className="mb-1 block text-[11px] text-slate-500">限速</label>
+                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400">限速</label>
                     <input type="text" value={downloadMaxSpeed} onChange={(e) => setDownloadMaxSpeed(e.target.value)} placeholder="如 10M" className="input-field text-sm" />
                   </div>
                   <div className="p-2">
-                    <label className="mb-1 block text-[11px] text-slate-500">输出格式</label>
+                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400">输出格式</label>
                     <select value={downloadMuxFormat} onChange={(e) => setDownloadMuxFormat(e.target.value)} className="input-field text-sm">
                       <option value="mp4">mp4</option>
                       <option value="mkv">mkv</option>
                     </select>
                   </div>
                   <div className="p-2">
-                    <label className="mb-1 block text-[11px] text-slate-500">自定义参数</label>
+                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400">自定义参数</label>
                     <input type="text" value={downloadCustomArgs} onChange={(e) => setDownloadCustomArgs(e.target.value)} placeholder="--header ..." className="input-field text-sm" />
                   </div>
-                  <label className="flex cursor-pointer items-center gap-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
-                    <input type="checkbox" checked={downloadAutoSelect} onChange={(e) => setDownloadAutoSelect(e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600" /> 自动选择最佳流
+                  <label className="flex cursor-pointer items-center gap-2 rounded-lg bg-slate-50 dark:bg-neutral-800/60 p-2 text-xs text-slate-300 dark:text-neutral-600">
+                    <input type="checkbox" checked={downloadAutoSelect} onChange={(e) => setDownloadAutoSelect(e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 dark:border-white/5 text-blue-500 dark:text-blue-400" /> 自动选择最佳流
                   </label>
-                  <label className="flex cursor-pointer items-center gap-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
-                    <input type="checkbox" checked={downloadSubOnly} onChange={(e) => setDownloadSubOnly(e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600" /> 仅下载字幕
+                  <label className="flex cursor-pointer items-center gap-2 rounded-lg bg-slate-50 dark:bg-neutral-800/60 p-2 text-xs text-slate-300 dark:text-neutral-600">
+                    <input type="checkbox" checked={downloadSubOnly} onChange={(e) => setDownloadSubOnly(e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 dark:border-white/5 text-blue-500 dark:text-blue-400" /> 仅下载字幕
                   </label>
                 </div>
               )}
@@ -1246,10 +1242,8 @@ export default function Home() {
 
             <div className="card p-5">
               <div className="flex items-center gap-2 mb-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
-                  <FileText size={15} />
-                </div>
-                <span className="text-sm font-semibold text-slate-800">批量下载</span>
+                <span className="text-2xl leading-none">🗂️</span>
+                <span className="text-sm font-semibold text-slate-800 dark:text-neutral-100">批量下载</span>
               </div>
 
               <textarea
@@ -1288,29 +1282,31 @@ export default function Home() {
 
               {batchItems.length > 0 && (
                 <div className="mt-4 space-y-2">
-                  {batchItems.map((item) => (
-                    <div key={item.id} className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2 text-sm">
-                      <div className="min-w-0 flex-1 pr-3">
-                        <div className="truncate font-medium text-slate-700">{item.saveName}</div>
-                        <div className="truncate text-[11px] text-slate-500">{item.url}</div>
+                  {batchItems.map((item) => {
+                    const BatchIcon = STATUS_ICON_META[item.status]
+                    const batchStatusText = item.status === 'running' ? '下载中' : TASK_STATUS_META[item.status].label
+                    return (
+                      <div key={item.id} className="flex items-center justify-between rounded-xl border border-slate-200 dark:border-neutral-800 bg-slate-50/60 dark:bg-neutral-800/45 px-3 py-2 text-sm">
+                        <div className="min-w-0 flex-1 pr-3">
+                          <div className="truncate font-medium text-slate-700 dark:text-neutral-200">{item.saveName}</div>
+                          <div className="truncate text-[11px] text-slate-500 dark:text-neutral-400">{item.url}</div>
+                        </div>
+                        <span title={batchStatusText} className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
+                          <BatchIcon.Icon size={14} className={`${BatchIcon.className}${BatchIcon.spin ? ' animate-spin' : ''}`} />
+                        </span>
                       </div>
-                      <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${TASK_STATUS_META[item.status].tone}`}>
-                        {item.status === 'running' ? '下载中' : TASK_STATUS_META[item.status].label}
-                      </span>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </div>
        </div>
       ) : (
        <div className="space-y-6">
-           <div className="card p-5 bg-gradient-to-br from-white to-red-50/40">
+           <div className="card p-5">
               <div className="flex items-center gap-2 mb-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-red-50 text-red-600">
-                  <Radio size={15} />
-                </div>
-                <span className="text-sm font-semibold text-slate-800">直播录制入口</span>
+                <span className="text-2xl leading-none">📹</span>
+                <span className="text-sm font-semibold text-slate-800 dark:text-neutral-100">直播录制入口</span>
               </div>
 
               <div className="space-y-2.5">
@@ -1333,21 +1329,21 @@ export default function Home() {
                     { v: livePerformAsVod, s: setLivePerformAsVod, l: '以点播方式下载' },
                     { v: liveFixVttByAudio, s: setLiveFixVttByAudio, l: '通过音频修正 VTT' },
                   ].map(({ v, s, l }) => (
-                    <label key={l} className="flex cursor-pointer items-center gap-2 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
-                      <input type="checkbox" checked={v} onChange={(e) => s(e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 text-red-600" />
+                    <label key={l} className="flex cursor-pointer items-center gap-2 rounded-lg bg-slate-50 dark:bg-neutral-800/60 p-2 text-xs text-slate-300 dark:text-neutral-600">
+                      <input type="checkbox" checked={v} onChange={(e) => s(e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 dark:border-white/5 text-red-500 dark:text-red-400" />
                       {l}
                     </label>
                   ))}
                   <div className="p-2">
-                    <label className="mb-1 block text-[11px] text-slate-500" title="两段式按 分:秒 解释（01:30 = 1分30秒）；三段式为 时:分:秒。将规范化后传给下载器">录制时长限制</label>
+                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400" title="两段式按 分:秒 解释（01:30 = 1分30秒）；三段式为 时:分:秒。将规范化后传给下载器">录制时长限制</label>
                     <input type="text" value={liveRecordLimit} onChange={(e) => setLiveRecordLimit(e.target.value)} placeholder="如 00:30（30秒）或 01:00:00" className="input-field text-sm" />
                   </div>
                   <div className="p-2">
-                    <label className="mb-1 block text-[11px] text-slate-500">刷新间隔 (秒)</label>
+                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400">刷新间隔 (秒)</label>
                     <input type="number" value={liveWaitTime} onChange={(e) => setLiveWaitTime(e.target.value)} placeholder="自动" className="input-field text-sm" />
                   </div>
                   <div className="p-2">
-                    <label className="mb-1 block text-[11px] text-slate-500" title="--live-take-count：实时合并时每个输出文件包含的分片数量">单文件分片数</label>
+                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400" title="--live-take-count：实时合并时每个输出文件包含的分片数量">单文件分片数</label>
                     <input type="number" value={liveTakeCount} onChange={(e) => setLiveTakeCount(e.target.value)} min={1} max={100} className="input-field text-sm" />
                   </div>
                 </div>
@@ -1356,25 +1352,25 @@ export default function Home() {
               <div className="mt-4 flex gap-2">
                 <button onClick={handleRecordStart} disabled={recordStarting} className="btn-primary flex items-center gap-2 text-sm"><Play size={16} /> {recordStarting ? '启动中...' : '开始录制'}</button>
               </div>
-              <p className="mt-2 text-[11px] text-slate-400">录制固定使用 MKV 封装：即使程序异常中断，已录内容仍可正常播放。可同时发起多个录制任务。</p>
+              <p className="mt-2 text-[11px] text-slate-500 dark:text-neutral-400">录制固定使用 MKV 封装：即使程序异常中断，已录内容仍可正常播放。可同时发起多个录制任务。</p>
             </div>
         </div>
       )}
 
       <div className="flex flex-1 flex-col gap-3">
         <div className="flex items-center justify-between">
-          <div className="text-[11px] font-bold tracking-[0.18em] text-slate-500 uppercase">任务列表</div>
-          <span className="text-xs text-slate-500">{visibleTasks.length} 个任务</span>
+          <div className="text-[11px] font-bold tracking-[0.18em] text-slate-500 dark:text-neutral-400 uppercase">任务列表</div>
+          <span className="text-xs text-slate-500 dark:text-neutral-400">{visibleTasks.length} 个任务</span>
         </div>
         <div className="card flex flex-1 flex-col p-3">
           <div className="flex flex-1 flex-col gap-2">
-            {visibleTasks.length > 0 ? visibleTasks.map((task, index) => renderTaskRow(task, index)) : (
-              <div className="flex min-h-[220px] flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center">
+            {visibleTasks.length > 0 ? visibleTasks.map((task) => renderTaskRow(task)) : (
+              <div className="flex min-h-[220px] flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 dark:border-white/5 bg-slate-50 dark:bg-neutral-800/60 px-4 py-10 text-center">
                 {activeTab === 'record'
-                  ? <Radio size={28} className="text-slate-300" />
-                  : <FileText size={28} className="text-slate-300" />}
-                <p className="text-sm text-slate-500">暂无{activeTab === 'download' ? '下载' : '录制'}任务</p>
-                <p className="text-xs text-slate-400">直接在上方创建{activeTab === 'download' ? '下载' : '录制'}任务</p>
+                  ? <span className="text-3xl leading-none">📹</span>
+                  : <span className="text-3xl leading-none">📄</span>}
+                <p className="text-sm text-slate-500 dark:text-neutral-400">暂无{activeTab === 'download' ? '下载' : '录制'}任务</p>
+                <p className="text-xs text-slate-500 dark:text-neutral-400">直接在上方创建{activeTab === 'download' ? '下载' : '录制'}任务</p>
               </div>
             )}
           </div>

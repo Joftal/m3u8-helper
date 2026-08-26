@@ -88,16 +88,16 @@ export default function Modal({ open, onClose, title, children, width = 'max-w-l
               aria-modal="true"
               aria-label={title || '对话框'}
               tabIndex={-1}
-              className={`bg-white rounded-xl border border-gray-100 ${width} w-full overflow-hidden outline-none`}
+              className={`bg-white dark:bg-neutral-900 rounded-xl border border-gray-100 dark:border-gray-700/60 ${width} w-full overflow-hidden outline-none`}
               style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.12)' }}
             >
               {title && (
-                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-                  <h2 className="text-base font-semibold text-gray-900">{title}</h2>
+                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-700/60">
+                  <h2 className="text-base font-semibold text-gray-900 dark:text-gray-50">{title}</h2>
                   <button
                     onClick={onClose}
                     aria-label="关闭"
-                    className="w-7 h-7 rounded-md flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                    className="w-7 h-7 rounded-md flex items-center justify-center text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
                   >
                     <X size={16} />
                   </button>

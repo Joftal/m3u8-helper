@@ -3,6 +3,21 @@ import type { DownloadTask } from '../types/download'
 /** 单文件分片数默认值（--live-take-count 的 CLI 默认），全站唯一来源 */
 export const DEFAULT_LIVE_TAKE_COUNT = 16
 
+/**
+ * 录制任务的默认选项基座：历史页「再次执行」还原录制任务时使用，
+ * 与首页录制入口的出厂默认保持一致（首页表单值仍由用户输入覆盖）。
+ */
+export const RECORD_TASK_DEFAULTS = {
+  autoSelect: true,
+  muxFormat: 'mkv',
+  kind: 'record' as const,
+  liveRealTimeMerge: true,
+  livePipeMux: false,
+  livePerformAsVod: false,
+  liveFixVttByAudio: false,
+  liveTakeCount: DEFAULT_LIVE_TAKE_COUNT
+}
+
 /** 录制时长限制上限：7 天，防止误输入超长时限导致任务永不停止 */
 export const MAX_LIVE_RECORD_LIMIT_SECONDS = 7 * 24 * 3600
 

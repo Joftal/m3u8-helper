@@ -77,6 +77,15 @@ const api = {
     openFile: (filters?: any[]) => ipcRenderer.invoke('dialog:openFile', filters)
   },
 
+  // 系统网络速度（netstat 网卡差分采样）
+  network: {
+    onStats: (callback: (data: { down: number; up: number }) => void) => {
+      const listener = (_: unknown, data: any) => callback(data)
+      ipcRenderer.on('network:stats', listener)
+      return () => ipcRenderer.removeListener('network:stats', listener)
+    }
+  },
+
   // 应用信息
   app: {
     getVersion: () => ipcRenderer.invoke('app:getVersion')

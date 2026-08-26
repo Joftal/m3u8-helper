@@ -23,11 +23,15 @@ function sanitizeHistoryRecord(raw: unknown): HistoryRecord | null {
     ? (input.status as HistoryRecord['status'])
     : 'failed'
 
+  // 来源类型白名单：非法值一律回落 download，保证旧数据/脏数据可读
+  const kind = input.kind === 'record' ? 'record' : 'download'
+
   return {
     id,
     url,
     saveName: asString(input.saveName, 512),
     status,
+    kind,
     startTime: asString(input.startTime, 64),
     endTime: asString(input.endTime, 64),
     fileSize: asNumber(input.fileSize),
@@ -124,7 +128,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
   ipcMain.handle('history:remove', async (_, id) => {
     const store = getStore()
     const history = store.get('history') || []
-    store.set('history', history.filter((h: any) => h.id !== id))
+    // id 类型收敛：异常输入（非字符串）时过滤全不匹配仍会误报成功
+    const normalizedId = String(id ?? '')
+    store.set('history', history.filter((h: any) => h.id !== normalizedId))
     return { success: true }
   })
 
