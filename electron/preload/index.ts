@@ -34,6 +34,11 @@ const api = {
       const listener = (_: unknown, data: any) => callback(data)
       ipcRenderer.on('download:complete', listener)
       return () => ipcRenderer.removeListener('download:complete', listener)
+    },
+    onRemuxDone: (callback: (data: { taskId: string; outputs: string[]; attempted: number }) => void) => {
+      const listener = (_: unknown, data: any) => callback(data)
+      ipcRenderer.on('record:artifacts-remuxed', listener)
+      return () => ipcRenderer.removeListener('record:artifacts-remuxed', listener)
     }
   },
 

@@ -51,6 +51,23 @@ export function parseLiveLimitRaw(raw: string): number {
 }
 
 /**
+ * 将用户输入的录制时限规范化为明确的 "HH:mm:ss" 再传给 CLI。
+ *
+ * 必须这样做：CLI（.NET）对两段式输入按 TimeSpan 规则解释为 hh:mm
+ * （如 "00:30" = 30 分钟），与 GUI 校验的 mm:ss 语义相悖，
+ * 导致限额静默失效。先在本地解析成秒、再展开为三段式，杜绝双端歧义。
+ * 未填写或非法返回 undefined（不限时）。
+ */
+export function formatLiveLimitForCli(raw: string): string | undefined {
+  const seconds = parseLiveLimitRaw(raw)
+  if (seconds <= 0) return undefined
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = seconds % 60
+  return [h, m, s].map((n) => String(n).padStart(2, '0')).join(':')
+}
+
+/**
  * 录制实际开始时间（毫秒）：优先取首条日志时间戳 —— CLI 从真正拉流才开始计时
  * 限额，首条日志比 IPC spawn 成功时刻更贴近该基准，可减小限额条的时间基准偏差。
  */

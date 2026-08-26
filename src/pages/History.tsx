@@ -87,9 +87,15 @@ export default function History() {
       }
 
       const taskId = result.taskId || generateId()
-      // 采纳主进程解析后的生效参数（隔离 tmpDir 等），与新建下载链路保持一致
+      // 采纳主进程解析后的生效参数（隔离 tmpDir、唯一化 saveName），与新建下载链路保持一致
       const effectiveOptions = result.options ?? options
-      const task = createTaskRecord({ id: taskId, url: record.url, saveName, saveDir: settings.saveDir, options: effectiveOptions })
+      const task = createTaskRecord({
+        id: taskId,
+        url: record.url,
+        saveName: effectiveOptions.saveName || saveName,
+        saveDir: settings.saveDir,
+        options: effectiveOptions
+      })
       useDownloadStore.getState().addTask(task)
       useDownloadStore.getState().setActiveTask(taskId)
       showToast('success', '已重新发起下载')

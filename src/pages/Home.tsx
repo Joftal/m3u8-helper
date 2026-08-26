@@ -9,7 +9,6 @@ import {
   Play,
   Radio,
   Settings2,
-  Square,
   Trash2,
   Upload,
 } from 'lucide-react'
@@ -17,14 +16,15 @@ import { useDownloadStore } from '@/store/downloadStore'
 import { useHistoryStore } from '@/store/historyStore'
 import { useSettingsStore } from '@/store/settingsStore'
 import Modal from '@/components/Modal'
-import LogViewerModal from '@/components/LogViewerModal'
 import { showToast } from '@/components/Toast'
-import { extractFileName, formatDuration, formatFileSize, generateId } from '@/utils/format'
+import { extractFileName, extractUrlHost, formatDuration, formatFileSize, generateId } from '@/utils/format'
 import { isValidUrl } from '@/utils/validators'
 import { TASK_STATUS_META } from '@/utils/status'
+import { formatNetworkSpeed } from '@/utils/speed'
 import { buildTaskOptions } from '@/utils/taskOptions'
 import {
   DEFAULT_LIVE_TAKE_COUNT,
+  formatLiveLimitForCli,
   getRecordDurationSeconds,
   getRecordElapsedSeconds,
   getRecordLimitSeconds,
@@ -70,8 +70,6 @@ export default function Home() {
   // 正在执行停止操作的录制任务：按钮保持禁用直至 complete 事件确认终止，
   // 避免对同一进程重复下发 taskkill（Windows PID 复用误杀风险）
   const [cancellingIds, setCancellingIds] = useState<string[]>([])
-  // 日志查看器当前展示的任务 ID
-  const [logViewerTaskId, setLogViewerTaskId] = useState<string | null>(null)
   // 重试确认弹窗目标：录制任务重试会清理已录产物，必须显式确认
   const [retryConfirmTask, setRetryConfirmTask] = useState<DownloadTask | null>(null)
   const [showRecordAdvanced, setShowRecordAdvanced] = useState(false)
@@ -211,11 +209,21 @@ export default function Home() {
     const offProgress = window.api.download.onProgress(handleProgress)
     const offLog = window.api.download.onLog(handleLog)
     const offComplete = window.api.download.onComplete(handleComplete)
+    // 录制停止/中断后主进程自动把 TS 中间产物转封装为 MKV，这里反馈结果
+    const offRemux = window.api.download.onRemuxDone((data) => {
+      if (!data || data.attempted <= 0) return
+      if (data.outputs.length > 0) {
+        showToast('success', `录制内容已自动转封装为 MKV（${data.outputs.length} 个文件）`)
+      } else {
+        showToast('error', '录制内容转封装失败，已保留原始 TS 文件，请检查 ffmpeg 设置')
+      }
+    })
 
     return () => {
       offProgress()
       offLog()
       offComplete()
+      offRemux()
     }
     // 订阅仅挂载时注册一次：handler 内通过 getState()/ref 取最新值，避免随进度更新反复重挂
   }, [])
@@ -223,7 +231,6 @@ export default function Home() {
   const downloadTasks = tasks.filter((task) => !isRecordTask(task))
   const recordTasks = tasks.filter((task) => isRecordTask(task))
   const visibleTasks = activeTab === 'download' ? downloadTasks : recordTasks
-  const activeRecordTask = recordTasks.find((task) => task.id === activeTaskId) ?? recordTasks[0] ?? null
 
   // 录制计时 ticker：仅在录制 Tab 可见且存在活跃录制任务时运行，
   // 驱动基于 startTime 的已录时长刷新（下载 Tab 期间录制 UI 不可见，无需空转重渲染）
@@ -242,33 +249,6 @@ export default function Home() {
 
   /** 解析录制时长限制为秒；未配置或非法返回 0（隐藏限额条） */
   const parseLiveLimitSeconds = (task: DownloadTask): number => getRecordLimitSeconds(task)
-
-  // 录制监控面板数据（选中/首个录制任务）
-  const monitorTask = activeRecordTask
-  const monitorIsLive = !!monitorTask && (monitorTask.status === 'running' || monitorTask.status === 'pending')
-  const monitorElapsed = monitorTask ? getRecordElapsed(monitorTask) ?? 0 : 0
-  const monitorLimitSeconds = monitorTask ? parseLiveLimitSeconds(monitorTask) : 0
-  const monitorLimitPct = monitorIsLive && monitorLimitSeconds > 0
-    ? Math.min(100, (monitorElapsed / monitorLimitSeconds) * 100)
-    : 0
-  // 直播模式下 CLI 通常不输出分片汇总：分片为 0 且有帧率数据时改显帧率
-  const monitorSegs = monitorTask ? Number(monitorTask.downloadedSegments || 0) : 0
-  const monitorFps = monitorTask ? Number(monitorTask.currentFrameRate || 0) : 0
-  const monitorThirdLabel = monitorSegs > 0 ? '分片' : monitorFps > 0 ? '帧率' : '分片'
-  const monitorThirdValue = monitorSegs > 0
-    ? String(monitorSegs)
-    : monitorFps > 0 ? `${monitorFps} fps` : '0'
-  // 终态录制的总时长（endTime 存在时才有值），监控面板与任务行共用
-  const monitorDuration = monitorTask ? getRecordDurationSeconds(monitorTask) : null
-  // 日志查看器的数据源（随 store 更新保持响应式）
-  const logTask = logViewerTaskId ? tasks.find((candidate) => candidate.id === logViewerTaskId) ?? null : null
-
-  // 日志查看器打开期间其任务被删除：自动收起，避免残留空态弹窗
-  useEffect(() => {
-    if (logViewerTaskId && !logTask) {
-      setLogViewerTaskId(null)
-    }
-  }, [logViewerTaskId, logTask])
 
   const getTaskActionMessage = (
     action: '取消' | '重试' | '删除',
@@ -336,7 +316,9 @@ export default function Home() {
     const task: DownloadTask = {
       id: taskId,
       url: downloadUrl.trim(),
-      saveName: downloadName || extractFileName(downloadUrl),
+      // 采纳主进程唯一化后的生效名：并发同名任务时主进程会追加短后缀，
+      // 记录/历史/删除链路必须与磁盘上的真实产物名一致
+      saveName: result.options?.saveName || downloadName || extractFileName(downloadUrl),
       saveDir: settings.saveDir,
       status: 'pending',
       progress: 0,
@@ -410,7 +392,9 @@ export default function Home() {
       livePipeMux,
       livePerformAsVod,
       liveFixVttByAudio,
-      liveRecordLimit: liveRecordLimit.trim() || undefined,
+      // 规范化为 HH:mm:ss 三段式：CLI 对两段式输入按 hh:mm 解释，
+      // 直接透传原始字符串会导致限额语义静默偏移（00:30 → 30 分钟）
+      liveRecordLimit: formatLiveLimitForCli(liveRecordLimit),
       liveWaitTime: waitRaw ? Number(waitRaw) : undefined,
       liveTakeCount: takeRaw ? takeCount : DEFAULT_LIVE_TAKE_COUNT,
     })
@@ -427,7 +411,8 @@ export default function Home() {
       const task: DownloadTask = {
         id: taskId,
         url: trimmedUrl,
-        saveName: recordName || extractFileName(trimmedUrl),
+        // 采纳主进程唯一化后的生效名（并发同名录制时追加短后缀），保证产物清理/历史一致
+        saveName: result.options?.saveName || recordName || extractFileName(trimmedUrl),
         saveDir: settings.saveDir,
         status: 'running',
         progress: 0,
@@ -440,7 +425,6 @@ export default function Home() {
       }
 
       addTask(task)
-      setActiveTask(taskId)
       showToast('success', '录制已开始')
     } finally {
       setRecordStarting(false)
@@ -692,7 +676,8 @@ export default function Home() {
       const task: DownloadTask = {
         id: taskId,
         url: item.url,
-        saveName: item.saveName,
+        // 批量场景同名概率最高，必须采纳主进程唯一化后的生效名
+        saveName: result.options?.saveName || item.saveName,
         saveDir: settings.saveDir,
         status: 'pending',
         progress: 0,
@@ -910,8 +895,8 @@ export default function Home() {
     error ? showToast('error', `打开失败: ${error}`) : showToast('success', '已打开所在文件夹')
   }
 
-  /** 录制任务行：直播录制是开放式过程，用已录时长/体积/速率取代无意义的进度百分比 */
-  const renderRecordRow = (task: DownloadTask) => {
+  /** 录制卡片：原「监控面板 + 列表行」合并后的单一卡片，活跃录制自带计时与指标 */
+  const renderRecordCard = (task: DownloadTask) => {
     const live = task.status === 'running' || task.status === 'pending'
     const elapsed = getRecordElapsed(task)
     const limitSeconds = parseLiveLimitSeconds(task)
@@ -919,116 +904,105 @@ export default function Home() {
       ? Math.min(100, (elapsed / limitSeconds) * 100)
       : 0
     const captured = Number(task.downloadedBytes || 0)
-    const isSelected = activeRecordTask?.id === task.id
     const isCancelling = cancellingIds.includes(task.id)
     const finishedDuration = getRecordDurationSeconds(task)
     const remaining = limitSeconds - (elapsed ?? 0)
+    // 平均速率 = 已捕获体积 / 时长，比实时速率更能反映整体采集效率；
+    // 直播模式下 CLI 不输出可解析的逐分片进度，故不展示分片数
+    const durationSeconds = live ? elapsed ?? 0 : finishedDuration ?? 0
+    const avgSpeed = captured > 0 && durationSeconds > 0
+      ? formatNetworkSpeed(captured / durationSeconds)
+      : ''
+    // 仅展示主机名：完整链接含授权参数，既占位又不宜裸露（悬停可见）
+    const host = extractUrlHost(task.url)
 
     return (
-      <div
-        key={task.id}
-        role="button"
-        tabIndex={0}
-        aria-pressed={isSelected}
-        aria-label={`录制任务 ${task.saveName || task.url}，点击切换监控面板`}
-        onClick={() => setActiveTask(task.id)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            setActiveTask(task.id)
-          }
-        }}
-        title="点击切换右侧监控面板显示的任务"
-        className={`cursor-pointer rounded-2xl border p-2.5 shadow-sm transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_rgba(59,130,246,0.45)] ${live ? 'border-red-200 bg-red-50/40' : 'border-slate-200 bg-slate-50/70'} ${isSelected ? 'shadow-[0_0_0_2px_rgba(59,130,246,0.30)]' : ''}`}
-      >
-        <div className="flex items-start gap-2.5">
-          <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${live ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500'}`}>
-            {live ? (
-              <span className="relative flex h-2.5 w-2.5">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
-              </span>
-            ) : (
-              <Radio size={13} />
-            )}
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="truncate text-[14px] font-semibold text-slate-800">{task.saveName || task.url}</h3>
-              <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${TASK_STATUS_META[task.status].tone}`}>
-                {live && <span className="h-1.5 w-1.5 rounded-full bg-red-500" />}
-                {task.status === 'running' ? '录制中' : TASK_STATUS_META[task.status].label}
-              </span>
+      <div key={task.id} className={`rounded-2xl border p-3 shadow-sm ${live ? 'border-red-200 bg-red-50/40' : 'border-slate-200 bg-slate-50/70'}`}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${live ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500'}`}>
+              {live ? (
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+                </span>
+              ) : (
+                <Radio size={13} />
+              )}
             </div>
-
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-slate-400">
-              {elapsed !== null ? (
-                <span className="font-mono tabular-nums">已录 {formatDuration(elapsed)}</span>
-              ) : finishedDuration !== null ? (
-                <span className="font-mono tabular-nums">时长 {formatDuration(finishedDuration)}</span>
-              ) : null}
-              {captured > 0 && <span>{formatFileSize(captured)}</span>}
-              {live && task.speed && task.speed !== '0 KB/s' && <span>{task.speed}</span>}
-              <span className="truncate max-w-[260px]" title={task.url}>{task.url}</span>
-            </div>
-
-            {live && limitSeconds > 0 && (
-              <div className="mt-1.5">
-                <div className="h-1 overflow-hidden rounded-full bg-slate-200">
-                  <div className="h-full rounded-full bg-red-500 transition-all" style={{ width: `${limitPct}%` }} />
-                </div>
-                <div className="mt-0.5 flex justify-between text-[10px] text-slate-400">
-                  <span>限额 {task.options?.liveRecordLimit}</span>
-                  {/* CLI 从真正拉流才开始计时限额，UI 计时到限不代表录制已结束 */}
-                  <span>{remaining > 0 ? `剩余 ${formatDuration(remaining)}` : '已达时限，等待录制收尾…'}</span>
-                </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <h3 className="truncate text-[14px] font-semibold text-slate-800" title={task.url}>{task.saveName || host || task.url}</h3>
+                {!live && (
+                  <span className={`inline-flex shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${TASK_STATUS_META[task.status].tone}`}>
+                    {TASK_STATUS_META[task.status].label}
+                  </span>
+                )}
               </div>
-            )}
+              {host && <p className="truncate text-[11px] text-slate-400" title={task.url}>{host}</p>}
+            </div>
           </div>
 
+          {live && (
+            <div className="shrink-0 text-right">
+              <div className="font-mono text-xl font-bold tabular-nums tracking-tight text-slate-900">{formatDuration(elapsed ?? 0)}</div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-red-500">录制中</div>
+            </div>
+          )}
+        </div>
+
+        {live && limitSeconds > 0 && (
+          <div className="mt-2">
+            <div className="h-1 overflow-hidden rounded-full bg-slate-200">
+              <div className="h-full rounded-full bg-red-500 transition-all" style={{ width: `${limitPct}%` }} />
+            </div>
+            <div className="mt-0.5 flex justify-between text-[10px] text-slate-400">
+              <span>限额 {task.options?.liveRecordLimit}</span>
+              {/* CLI 从真正拉流才开始计时限额，UI 计时到限不代表录制已结束 */}
+              <span>{remaining > 0 ? `剩余 ${formatDuration(remaining)}` : '已达时限，等待录制收尾…'}</span>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-0.5 font-mono text-[11px] tabular-nums text-slate-500">
+          {captured > 0 && <span>已捕获 {formatFileSize(captured)}</span>}
+          {live && task.speed && task.speed !== '0 KB/s' && <span>实时 {task.speed}</span>}
+          {avgSpeed && <span>平均 {avgSpeed}</span>}
+          {!live && finishedDuration !== null && (
+            // 墙钟耗时而非媒体时长：回放型播放列表的下载速度快于实时，二者不等
+            <span title="录制墙钟耗时；非直播源下载快于实时时，会小于视频文件时长">耗时 {formatDuration(finishedDuration)}</span>
+          )}
+        </div>
+
+        <div className="mt-2.5 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white/70 px-3 py-1.5">
+          <div className="min-w-0 truncate text-[11px] text-slate-400" title={task.saveDir || settings.saveDir}>
+            保存至 {task.saveDir || settings.saveDir || '默认下载目录'}
+          </div>
           <div className="flex shrink-0 items-center gap-1.5">
-            <button
-              onClick={(e) => { e.stopPropagation(); setLogViewerTaskId(task.id) }}
-              className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 hover:bg-slate-100"
-            >
-              日志
-            </button>
+            {(task.saveDir || settings.saveDir) && (
+              <button onClick={() => openTaskFolder(task)}
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 hover:bg-slate-100">
+                打开
+              </button>
+            )}
             {live ? (
-              <button
-                // 录制停止必须保留已录内容：直接取消进程，不走会删除产物的 handleTaskCancel
-                onClick={(e) => { e.stopPropagation(); stopRecording(task.id) }}
-                disabled={isCancelling}
-                className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-medium text-red-600 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
-              >
+              // 录制停止必须保留已录内容：直接取消进程，不走会删除产物的 handleTaskCancel
+              <button onClick={() => stopRecording(task.id)} disabled={isCancelling}
+                className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-[10px] font-semibold text-red-600 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60">
                 {isCancelling ? '停止中…' : '停止'}
               </button>
             ) : (
               <>
-                {(task.saveDir || settings.saveDir) && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); openTaskFolder(task) }}
-                    className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 hover:bg-slate-100"
-                  >
-                    打开
-                  </button>
-                )}
                 {task.status === 'failed' && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); requestRetry(task) }}
-                    className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-medium text-emerald-700 hover:bg-emerald-100"
-                  >
+                  <button onClick={() => requestRetry(task)}
+                    className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-medium text-emerald-700 hover:bg-emerald-100">
                     重试
                   </button>
                 )}
-                {(task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); openDeleteConfirm(task) }}
-                    className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-medium text-red-700 hover:bg-red-100"
-                  >
-                    删除
-                  </button>
-                )}
+                <button onClick={() => openDeleteConfirm(task)}
+                  className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-medium text-red-700 hover:bg-red-100">
+                  删除
+                </button>
               </>
             )}
           </div>
@@ -1038,7 +1012,7 @@ export default function Home() {
   }
 
   const renderTaskRow = (task: DownloadTask, index: number) => {
-    if (isRecordTask(task)) return renderRecordRow(task)
+    if (isRecordTask(task)) return renderRecordCard(task)
     const progress = Math.min(100, Math.max(0, Number(task.progress) || 0))
     const canCancel = task.status === 'running' || task.status === 'pending'
     const canRetry = task.status === 'failed' || task.status === 'cancelled'
@@ -1100,7 +1074,7 @@ export default function Home() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-1 flex-col gap-6">
       <Modal open={Boolean(deleteConfirmTask)} onClose={() => setDeleteConfirmTask(null)} title="删除任务" width="max-w-md">
         <div className="space-y-4">
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
@@ -1168,13 +1142,6 @@ export default function Home() {
           </div>
         </div>
       </Modal>
-
-      <LogViewerModal
-        open={Boolean(logViewerTaskId)}
-        onClose={() => setLogViewerTaskId(null)}
-        title={logTask?.saveName || logTask?.url || '任务日志'}
-        logs={logTask?.logs || []}
-      />
 
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -1344,11 +1311,6 @@ export default function Home() {
                   <Radio size={15} />
                 </div>
                 <span className="text-sm font-semibold text-slate-800">直播录制入口</span>
-                {activeRecordCount > 0 && (
-                  <span className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-red-50 px-2 py-1 text-[11px] font-medium text-red-600">
-                    <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" /> 录制中{activeRecordCount > 1 ? ` ×${activeRecordCount}` : ''}
-                  </span>
-                )}
               </div>
 
               <div className="space-y-2.5">
@@ -1377,8 +1339,8 @@ export default function Home() {
                     </label>
                   ))}
                   <div className="p-2">
-                    <label className="mb-1 block text-[11px] text-slate-500">录制时长限制</label>
-                    <input type="text" value={liveRecordLimit} onChange={(e) => setLiveRecordLimit(e.target.value)} placeholder="HH:mm:ss 或 mm:ss" className="input-field text-sm" />
+                    <label className="mb-1 block text-[11px] text-slate-500" title="两段式按 分:秒 解释（01:30 = 1分30秒）；三段式为 时:分:秒。将规范化后传给下载器">录制时长限制</label>
+                    <input type="text" value={liveRecordLimit} onChange={(e) => setLiveRecordLimit(e.target.value)} placeholder="如 00:30（30秒）或 01:00:00" className="input-field text-sm" />
                   </div>
                   <div className="p-2">
                     <label className="mb-1 block text-[11px] text-slate-500">刷新间隔 (秒)</label>
@@ -1393,160 +1355,26 @@ export default function Home() {
 
               <div className="mt-4 flex gap-2">
                 <button onClick={handleRecordStart} disabled={recordStarting} className="btn-primary flex items-center gap-2 text-sm"><Play size={16} /> {recordStarting ? '启动中...' : '开始录制'}</button>
-                <button
-                  onClick={() => monitorIsLive && monitorTask && stopRecording(monitorTask.id)}
-                  disabled={!monitorIsLive || !monitorTask || cancellingIds.includes(monitorTask.id)}
-                  title={activeRecordCount > 1 ? '停止当前监控显示的录制任务' : undefined}
-                  className="btn-secondary flex items-center gap-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <Square size={14} /> {monitorTask && cancellingIds.includes(monitorTask.id) ? '停止中...' : '停止'}
-                </button>
               </div>
               <p className="mt-2 text-[11px] text-slate-400">录制固定使用 MKV 封装：即使程序异常中断，已录内容仍可正常播放。可同时发起多个录制任务。</p>
             </div>
-
-            <div className="card p-5">
-              <div className={`mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] ${monitorIsLive ? 'text-red-500' : 'text-slate-400'}`}>
-                <Radio size={12} />
-                {monitorIsLive ? '正在录制' : '录制监控'}
-              </div>
-
-              {activeRecordCount > 1 && (
-                <p className="-mt-1 mb-3 text-[10px] text-slate-400">共有 {activeRecordCount} 个录制任务，点击下方列表行可切换监控对象</p>
-              )}
-
-              {monitorTask && monitorIsLive ? (
-                <div>
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-2.5">
-                      <span className="relative flex h-2.5 w-2.5 shrink-0">
-                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-                        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
-                      </span>
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-slate-800">{monitorTask.saveName || monitorTask.url}</div>
-                        <div className="truncate text-[11px] text-slate-400">{monitorTask.url}</div>
-                      </div>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <div className="font-mono text-2xl font-bold tabular-nums tracking-tight text-slate-900">{formatDuration(monitorElapsed)}</div>
-                      <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400">已录时长</div>
-                    </div>
-                  </div>
-
-                  {monitorLimitSeconds > 0 && (
-                    <div className="mt-3">
-                      <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
-                        <div className="h-full rounded-full bg-red-500 transition-all" style={{ width: `${monitorLimitPct}%` }} />
-                      </div>
-                      <div className="mt-1 flex justify-between text-[10px] text-slate-400">
-                        <span>限额 {monitorTask.options?.liveRecordLimit}</span>
-                        {/* CLI 从真正拉流才开始计时限额，UI 计时到限不代表录制已结束 */}
-                        <span>{monitorLimitSeconds - monitorElapsed > 0 ? `剩余 ${formatDuration(monitorLimitSeconds - monitorElapsed)}` : '已达时限，等待录制收尾…'}</span>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="mt-4 grid grid-cols-3 gap-2.5">
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
-                      <div className="text-[10px] uppercase tracking-[0.12em] text-slate-400">已捕获</div>
-                      <div className="mt-1 text-sm font-bold text-slate-800">{formatFileSize(Number(monitorTask.downloadedBytes || 0))}</div>
-                    </div>
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
-                      <div className="text-[10px] uppercase tracking-[0.12em] text-slate-400">实时速率</div>
-                      <div className="mt-1 text-sm font-bold text-slate-800">{monitorTask.speed || '0 KB/s'}</div>
-                    </div>
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
-                      <div className="text-[10px] uppercase tracking-[0.12em] text-slate-400">{monitorThirdLabel}</div>
-                      <div className="mt-1 text-sm font-bold text-slate-800">{monitorThirdValue}</div>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                    <div className="min-w-0 truncate text-[11px] text-slate-400" title={monitorTask.saveDir || settings.saveDir}>
-                      保存至 {monitorTask.saveDir || settings.saveDir || '默认下载目录'}
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1.5">
-                      <button onClick={() => setLogViewerTaskId(monitorTask.id)}
-                        className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 hover:bg-slate-100">
-                        日志
-                      </button>
-                      <button onClick={() => openTaskFolder(monitorTask)}
-                        className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 hover:bg-slate-100">
-                        打开
-                      </button>
-                    </div>
-                  </div>
-
-                  {monitorTask.latestLog && (
-                    <p className="mt-2 truncate text-[11px] text-slate-400" title={monitorTask.latestLog}>{monitorTask.latestLog}</p>
-                  )}
-
-                  <button
-                    onClick={() => stopRecording(monitorTask.id)}
-                    disabled={cancellingIds.includes(monitorTask.id)}
-                    className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-70"
-                  >
-                    <Square size={15} /> {cancellingIds.includes(monitorTask.id) ? '正在停止…' : '停止录制并保存'}
-                  </button>
-                </div>
-              ) : monitorTask ? (
-                <div>
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-slate-800">{monitorTask.saveName || monitorTask.url}</div>
-                      <div className="truncate text-[11px] text-slate-400">{monitorTask.url}</div>
-                    </div>
-                    <span className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${TASK_STATUS_META[monitorTask.status].tone}`}>
-                      {TASK_STATUS_META[monitorTask.status].label}
-                    </span>
-                  </div>
-                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-400">
-                    {monitorDuration !== null && (
-                      <span className="font-mono tabular-nums">时长 {formatDuration(monitorDuration)}</span>
-                    )}
-                    {Number(monitorTask.downloadedBytes || 0) > 0 && (
-                      <span>录制数据 {formatFileSize(Number(monitorTask.downloadedBytes))}</span>
-                    )}
-                    {monitorTask.latestLog && <span className="truncate">{monitorTask.latestLog}</span>}
-                  </div>
-                  <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                    <div className="min-w-0 truncate text-[11px] text-slate-400" title={monitorTask.saveDir || settings.saveDir}>
-                      保存至 {monitorTask.saveDir || settings.saveDir || '默认下载目录'}
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1.5">
-                      <button onClick={() => setLogViewerTaskId(monitorTask.id)}
-                        className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 hover:bg-slate-100">
-                        日志
-                      </button>
-                      <button onClick={() => openTaskFolder(monitorTask)}
-                        className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 hover:bg-slate-100">
-                        打开文件夹
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center py-8 text-center">
-                  <Radio size={28} className="mb-2 text-slate-300" />
-                  <p className="text-sm text-slate-400">暂无进行中的录制</p>
-                  <p className="mt-1 text-xs text-slate-300">在上方粘贴直播链接即可开始录制</p>
-                </div>
-              )}
-            </div>
-       </div>
+        </div>
       )}
 
-      <div className="space-y-3">
+      <div className="flex flex-1 flex-col gap-3">
         <div className="flex items-center justify-between">
           <div className="text-[11px] font-bold tracking-[0.18em] text-slate-500 uppercase">任务列表</div>
           <span className="text-xs text-slate-500">{visibleTasks.length} 个任务</span>
         </div>
-        <div className="card p-3">
-          <div className="space-y-2">
+        <div className="card flex flex-1 flex-col p-3">
+          <div className="flex flex-1 flex-col gap-2">
             {visibleTasks.length > 0 ? visibleTasks.map((task, index) => renderTaskRow(task, index)) : (
-              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500 text-center">
-                暂无{activeTab === 'download' ? '下载' : '录制'}任务，直接在上方创建{activeTab === 'download' ? '下载' : '录制'}任务。
+              <div className="flex min-h-[220px] flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center">
+                {activeTab === 'record'
+                  ? <Radio size={28} className="text-slate-300" />
+                  : <FileText size={28} className="text-slate-300" />}
+                <p className="text-sm text-slate-500">暂无{activeTab === 'download' ? '下载' : '录制'}任务</p>
+                <p className="text-xs text-slate-400">直接在上方创建{activeTab === 'download' ? '下载' : '录制'}任务</p>
               </div>
             )}
           </div>

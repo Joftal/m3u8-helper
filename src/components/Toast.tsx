@@ -37,15 +37,15 @@ export default function Toast() {
   }
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2">
+    <div className="fixed left-1/2 top-14 z-50 flex -translate-x-1/2 flex-col items-center gap-2">
       <AnimatePresence>
         {toasts.map((toast) => (
           <motion.div
             key={toast.id}
-            initial={{ opacity: 0, y: 12, scale: 0.97 }}
+            initial={{ opacity: 0, y: -12, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -8, scale: 0.97 }}
-            className="bg-white px-4 py-3 rounded-lg border border-gray-100 flex items-center gap-3 min-w-[260px] max-w-[380px]"
+            exit={{ opacity: 0, y: -12, scale: 0.97 }}
+            className="bg-white px-4 py-3 rounded-lg border border-gray-100 flex items-center gap-3 min-w-[260px] max-w-[420px]"
             style={{ boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
           >
             {icons[toast.type]}

@@ -54,6 +54,17 @@ export function extractFileName(url: string): string {
 }
 
 /**
+ * 提取 URL 主机名（用于界面展示，避免完整链接中的授权参数造成干扰）
+ */
+export function extractUrlHost(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return ''
+  }
+}
+
+/**
  * 生成唯一 ID
  */
 export function generateId(): string {

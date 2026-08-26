@@ -32,6 +32,11 @@ const activeTasks = new Map<string, DownloadTask>()
 /** 最近一次启动下载时使用的窗口引用，用于取消等无法传入窗口的路径发送事件 */
 let activeMainWindow: BrowserWindow | null = null
 
+/** 窗口创建后由主入口注册：保证启动恢复阶段的转封装等后台动作也能通知到渲染端 */
+export function setActiveMainWindow(window: BrowserWindow | null): void {
+  activeMainWindow = window
+}
+
 /** runtime-tasks.json 落盘节流间隔：高频日志场景合并为每秒最多一次写入 */
 const PERSIST_INTERVAL_MS = 1000
 /** download:progress 事件最小发送间隔（最新值胜出），避免逐行日志触发渲染端重绘风暴 */
@@ -40,6 +45,122 @@ const PROGRESS_SEND_INTERVAL_MS = 200
 const MAX_TASK_LOG_LINES = 500
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * 剥离 CLI 输出中的 ANSI 转义序列与残余控制字符。
+ * --force-ansi-console 下除颜色码（SGR ...m）外还会出现光标控制（[2K/[1A 等），
+ * 仅剥颜色码会在日志里残留 "[2K" 之类的可见乱码，这里按 OSC/CSI/单字符转义全量清除。
+ */
+const RE_OSC_SEQUENCE = /\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)/g
+const RE_CSI_SEQUENCE = /\x1B\[[0-?]*[ -/]*[@-~]/g
+const RE_ESC_SEQUENCE = /\x1B[@-Z\\-_]/g
+/** 清除残余控制字符：保留 TAB(0x09)，LF/CR 已按行切分处理 */
+const RE_CONTROL_CHARS = /[\x00-\x08\x0B-\x1F\x7F]/g
+
+function sanitizeCliText(line: string): string {
+  return line
+    .replace(RE_OSC_SEQUENCE, '')
+    .replace(RE_CSI_SEQUENCE, '')
+    .replace(RE_ESC_SEQUENCE, '')
+    .replace(RE_CONTROL_CHARS, '')
+}
+
+/** ANSI（系统代码页）解码器的候选实现，按常见中文区代码页优先尝试 */
+const ANSI_DECODER_LABELS = ['gbk', 'gb18030', 'big5', 'windows-1252'] as const
+
+function createAnsiDecoder(): TextDecoder {
+  for (const label of ANSI_DECODER_LABELS) {
+    try {
+      return new TextDecoder(label)
+    } catch {
+      // 当前 ICU 不支持该代码页时继续尝试下一个
+    }
+  }
+  return new TextDecoder('utf-8')
+}
+
+/**
+ * CLI 输出按字节攒行并解码。
+ *
+ * N_m3u8DL-RE 在 stdout/stderr 被重定向时按系统 ANSI 代码页输出
+ * （简中 Windows 为 GBK），直接 data.toString()（UTF-8）会把全部
+ * 中文日志变成乱码。此外多字节字符可能被管道 chunk 从中间截断，
+ * 必须以字节为单位攒出完整行后再解码。
+ *
+ * 按字节切行的安全性：GBK 双字节字符的尾字节取值不会落在
+ * CR/LF（0x0D/0x0A），UTF-8 的续字节同样如此，因此在任意多字节
+ * 字符中间不会出现换行字节，行边界判定不受编码影响。
+ *
+ * 字符集探测：首个含非 ASCII 的行用严格 UTF-8 尝试，成功则整流
+ * 按 UTF-8 解码；失败则回落 ANSI 代码页。纯 ASCII 行两种编码等价，
+ * 保持未定型即可。
+ */
+class CliLineReader {
+  private buffer: Buffer = Buffer.alloc(0)
+  private readonly ansiDecoder = createAnsiDecoder()
+  private charset: 'utf8' | 'ansi' | null = null
+
+  /** 追加原始输出，返回其中已完整的行 */
+  push(chunk: Buffer): string[] {
+    this.buffer = this.buffer.length === 0 ? Buffer.from(chunk) : Buffer.concat([this.buffer, chunk])
+    return this.drain(false)
+  }
+
+  /** 流结束时冲出残留的最后一行（可能无换行结尾） */
+  end(): string[] {
+    const lines = this.drain(true)
+    this.buffer = Buffer.alloc(0)
+    return lines
+  }
+
+  private drain(flush: boolean): string[] {
+    const lines: string[] = []
+    let start = 0
+    let i = 0
+    while (i < this.buffer.length) {
+      const byte = this.buffer[i]
+      if (byte !== 0x0d && byte !== 0x0a) {
+        i += 1
+        continue
+      }
+      lines.push(this.decode(this.buffer.subarray(start, i)))
+      i += 1
+      // CRLF 视为单个分隔符
+      if (byte === 0x0d && this.buffer[i] === 0x0a) i += 1
+      start = i
+    }
+    const rest = this.buffer.subarray(start)
+    if (flush) {
+      if (rest.length > 0) lines.push(this.decode(rest))
+      this.buffer = Buffer.alloc(0)
+    } else {
+      this.buffer = rest.length > 0 ? Buffer.from(rest) : Buffer.alloc(0)
+    }
+    return lines
+  }
+
+  private decode(bytes: Buffer): string {
+    if (bytes.length === 0) return ''
+    if (this.charset === 'utf8') return bytes.toString('utf8')
+    if (this.charset === 'ansi') return sanitizeCliWhitespace(this.ansiDecoder.decode(bytes))
+    try {
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+      if (/[^\x00-\x7F]/.test(text)) this.charset = 'utf8'
+      return text
+    } catch {
+      this.charset = 'ansi'
+      return sanitizeCliWhitespace(this.ansiDecoder.decode(bytes))
+    }
+  }
+}
+
+/** TextDecoder 对 GBK 中 U+FFFD 类不可映射字节的兜底替换符清理 */
+function sanitizeCliWhitespace(text: string): string {
+  return text.replace(RE_CONTROL_CHARS, '')
+}
+
+/** CLI 日志行自带时间戳与级别前缀（如 "08:32:22.466 WARN : "） */
+const RE_CLI_LOG_PREFIX = /^\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+(DEBUG|INFO|WARN|ERROR)\s*[:：]\s*/
 
 function appendTaskLog(task: DownloadTask & Record<string, any>, line: string): void {
   task.logs.push(line)
@@ -99,6 +220,141 @@ function splitCustomArgs(raw: string): string[] {
 /** 系统通知图标：与窗口图标同源；文件缺失时 createFromPath 返回空图，自动回退系统默认 */
 const NOTIFICATION_ICON = nativeImage.createFromPath(join(__dirname, '../../resources/icon.png'))
 
+/**
+ * 进行中的 TS 转封装任务表：taskId → 落盘上下文。
+ * 除防重入外，还供 startDownload 做同名检测：转封装是异步后台动作，
+ * 若新任务在其扫描/删除窗口内复用同名同目录，会写进正被处理的文件集，
+ * 造成新任务产物被误转/误删，必须强制错开命名。
+ */
+const activeRemuxJobs = new Map<string, { saveDir: string; stemLower: string }>()
+
+/**
+ * 产物文件名匹配：仅接受 <stem>.<ext> 或 <stem>[._-]数字分片.<ext>。
+ * 多任务并发时 saveDir 共享，宽松的前缀/includes 匹配会把「test2.ts」
+ * 误判给「test」任务，造成跨任务转封装/误删/速度统计串扰，必须带边界。
+ */
+function artifactStemRegex(stem: string): RegExp {
+  const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  // 允许：精确同名、数字分片后缀（_00/-1/.2），后接单个可选扩展名；
+  // 「test2.mkv」这类紧跟字母数字的名字不会被「test」误匹配
+  return new RegExp(`^${escaped}(?:[._-]\\d+)?\\.[^.]+$|^${escaped}$`, 'i')
+}
+
+/** 按任务派生独立日志文件路径：保留目录与前缀，追加 taskId 前 8 位（N_m3u8DL-RE_a1b2c3d4.log） */
+function deriveTaskLogPath(baseLogPath: string, taskId: string): string {
+  const shortId = taskId.slice(0, 8)
+  const dirEnd = Math.max(baseLogPath.lastIndexOf('\\'), baseLogPath.lastIndexOf('/'))
+  if (dirEnd < 0) return `${baseLogPath}_${shortId}.log`
+  const dotIndex = baseLogPath.lastIndexOf('.')
+  const dir = baseLogPath.slice(0, dirEnd)
+  const sep = baseLogPath[dirEnd]
+  const base = baseLogPath.slice(dirEnd + 1, dotIndex > dirEnd ? dotIndex : undefined)
+  const ext = dotIndex > dirEnd ? baseLogPath.slice(dotIndex) : '.log'
+  return `${dir}${sep}${base}_${shortId}${ext}`
+}
+
+/** 解析可用的 ffmpeg 可执行文件：设置路径 → 打包携带路径 → PATH */
+function resolveFfmpegBinary(settings: AppSettings): string {
+  const executableRoot = dirname(process.execPath)
+  const candidates = [
+    settings.ffmpegPath,
+    join(executableRoot, 'ffmpeg.exe'),
+    join(executableRoot, 'resources', 'bin', 'ffmpeg.exe'),
+    join(__dirname, '../../ffmpeg.exe'),
+    join(__dirname, '../../resources/bin/ffmpeg.exe')
+  ]
+  for (const candidate of candidates) {
+    if (candidate && candidate.trim() && existsSync(candidate.trim())) return candidate.trim()
+  }
+  return 'ffmpeg'
+}
+
+export interface RemuxOutcome {
+  taskId: string
+  /** 转封装成功产出的 MKV 文件 */
+  outputs: string[]
+  /** 发现并尝试转换的 TS 文件数（含失败的） */
+  attempted: number
+}
+
+/**
+ * 扫描录制任务遗留的 TS 中间产物并无损转封装为 MKV。
+ *
+ * 背景：CLI 的收尾混流（TS → MKV）只在到达限额或直播自然结束时执行；
+ * 手动停止会强杀进程树，留下的始终是实时合并的 .ts 中间产物。
+ * 此处用 ffmpeg -c copy 补上这一步（零重编码、秒级），失败时保留源文件。
+ */
+async function remuxTsArtifacts(
+  taskId: string,
+  saveDir: string,
+  saveName: string,
+  settings: AppSettings
+): Promise<RemuxOutcome> {
+  const outcome: RemuxOutcome = { taskId, outputs: [], attempted: 0 }
+  const stem = basename(saveName || '').trim()
+  if (!taskId || !stem || !saveDir) return outcome
+
+  let entries: Array<{ name: string; isFile: () => boolean }>
+  try {
+    entries = readdirSync(saveDir, { withFileTypes: true }) as any
+  } catch {
+    return outcome
+  }
+
+  const tsFiles = entries
+    .filter((e) => e.isFile())
+    .filter((e) => {
+      const name = e.name.toLowerCase()
+      if (!name.endsWith('.ts') || name.endsWith('.copy.ts')) return false
+      // 单文件为 <名字>.ts，多分片为 <名字>_NN.ts；带边界的匹配防止误伤近似命名的并发任务
+      return artifactStemRegex(stem).test(e.name)
+    })
+    .map((e) => join(saveDir, e.name))
+  if (tsFiles.length === 0) return outcome
+
+  const ffmpeg = resolveFfmpegBinary(settings)
+  for (const ts of tsFiles) {
+    outcome.attempted += 1
+    const target = ts.slice(0, -3) + '.mkv'
+    const ok = await new Promise<boolean>((resolve) => {
+      const child = spawn(
+        ffmpeg,
+        ['-y', '-fflags', '+genpts', '-i', ts, '-map', '0', '-c', 'copy', target],
+        { windowsHide: true, stdio: 'ignore' }
+      )
+      child.on('close', (code) => resolve(code === 0))
+      child.on('error', () => resolve(false))
+    })
+    if (ok) {
+      try {
+        rmSync(ts, { force: true })
+      } catch {}
+      outcome.outputs.push(target)
+    }
+  }
+  return outcome
+}
+
+/** 转封装完成后向渲染端发事件（toast 反馈）；窗口不可用时静默完成 */
+function dispatchRemuxOutcome(outcome: RemuxOutcome): void {
+  if (outcome.attempted === 0) return
+  activeMainWindow?.webContents.send('record:artifacts-remuxed', outcome)
+}
+
+/** 对单个已终结的录制任务发起后台转封装（fire-and-forget） */
+function scheduleRemux(taskId: string, saveDir: string | undefined, saveName: string | undefined): void {
+  if (!taskId || activeRemuxJobs.has(taskId)) return
+  const stem = basename(saveName || '').trim()
+  activeRemuxJobs.set(taskId, {
+    saveDir: (saveDir || '').trim().toLowerCase(),
+    stemLower: stem.toLowerCase()
+  })
+  const settings = getStore().get('settings') as AppSettings
+  remuxTsArtifacts(taskId, saveDir || '', saveName || '', settings)
+    .then(dispatchRemuxOutcome)
+    .catch(() => {})
+    .finally(() => activeRemuxJobs.delete(taskId))
+}
 /**
  * 录制任务终态系统通知：
  * - 失败必须提示 —— 后台挂机录制的异常终止对用户不可见，且已录内容已按策略保留；
@@ -183,6 +439,12 @@ function finalizeTask(taskId: string, exitCode: number | null): void {
 
   notifyRecordFinished(task)
 
+  // 非优雅收尾的录制任务：CLI 的收尾混流（TS→MKV）不会执行，由 GUI 补做转封装。
+  // completed 状态 CLI 已产出正式 MKV；多分片场景逐个转换，失败保留源 TS。
+  if (isRecordTask && (task.status === 'cancelled' || task.status === 'failed')) {
+    scheduleRemux(taskId, (task as any).saveDir, (task as any).saveName)
+  }
+
   if (task._speedTimer) {
     clearInterval(task._speedTimer)
     task._speedTimer = null
@@ -253,10 +515,12 @@ async function getTaskAttributableBytes(task: DownloadTask & Record<string, any>
   const saveName: string = task.saveName || task.options?.saveName || ''
   if (saveDir && saveDir.trim() && saveName) {
     const stem = basename(saveName)
+    // 带边界匹配：共享 saveDir 时只统计本任务的产物，防止并发任务速度互相串扰
+    const artifactRegex = artifactStemRegex(stem)
     try {
       const entries = await fsPromises.readdir(saveDir.trim(), { withFileTypes: true })
       for (const entry of entries) {
-        if (!entry.isFile() || !entry.name.includes(stem)) continue
+        if (!entry.isFile() || !artifactRegex.test(entry.name)) continue
         try {
           total += (await fsPromises.stat(join(saveDir.trim(), entry.name))).size
         } catch {
@@ -348,6 +612,8 @@ export function interruptOrphanedRuntimeTasks(): void {
 
   let changed = false
   let historyChanged = false
+  /** 崩溃任务残留的隔离临时目录：碎片不可续用（重试会派生全新目录），统一回收 */
+  const staleTmpDirs: string[] = []
   const nowIso = new Date().toISOString()
   const history: any[] = Array.isArray(store.get('history')) ? store.get('history') : []
 
@@ -357,6 +623,18 @@ export function interruptOrphanedRuntimeTasks(): void {
     task.status = 'failed'
     task.latestLog = '应用重启导致下载中断，可重试继续'
     changed = true
+
+    // 崩溃时 finalizeTask 未执行，隔离临时目录未被清理；校验命名归属后收集待删
+    const orphanTmpDir: string = task?.options?.tmpDir || ''
+    if (orphanTmpDir && basename(orphanTmpDir) === `task-${task.id}`) {
+      staleTmpDirs.push(orphanTmpDir)
+    }
+
+    // 中断的录制任务同样遗留 TS 中间产物，启动时补做转封装（窗口未就绪时事件静默）。
+    // 放在历史补写之前：已被 continue 跳过历史写入的任务也需要转封装。
+    if (isRecordTaskOptions(task.options)) {
+      scheduleRemux(String(task.id ?? ''), task.saveDir, task.saveName)
+    }
 
     // 补写失败历史（按 id 去重，避免重复中断产生多条）
     // 字段截断与 ipc-handlers.sanitizeHistoryRecord 保持同一标准
@@ -387,6 +665,12 @@ export function interruptOrphanedRuntimeTasks(): void {
   }
   if (historyChanged) {
     store.set('history', history)
+  }
+
+  // 回收崩溃残留的临时目录：经 removeGuarded 校验（命名归属 + path-safety）后删除
+  for (const dirPath of staleTmpDirs) {
+    if (!existsSync(dirPath)) continue
+    removeGuarded(dirPath, [], [])
   }
 }
 
@@ -459,12 +743,37 @@ export function startDownload(options: DownloadOptions, mainWindow: BrowserWindo
 
   // 目录解析仅在本任务内生效，不回写全局设置，避免单次任务参数污染全局配置
   const effectiveSaveDir = options.saveDir || settings.saveDir || defaultSaveDir
+
+  // 并发任务输出文件名唯一化：两个活动任务同名会让 CLI 输出互相覆盖。
+  // 除检查活动任务（running/pending）外，还检查同名同目录的后台转封装是否仍在进行，
+  // 避免新任务写入正被扫描/删除的文件集；重试链路在启动前已清理旧任务故不受影响
+  let effectiveSaveName = typeof options.saveName === 'string' ? options.saveName.trim() : ''
+  if (effectiveSaveName) {
+    const lowerName = effectiveSaveName.toLowerCase()
+    const nameTaken =
+      // Windows 文件系统大小写不敏感：必须按小写比较，否则「Stream/stream」
+      // 两个并发任务会写同一组物理文件互相覆盖
+      Array.from(activeTasks.values()).some(
+        (t) =>
+          (t.status === 'running' || t.status === 'pending') &&
+          String((t as any).saveName || '').toLowerCase() === lowerName
+      ) ||
+      Array.from(activeRemuxJobs.values()).some(
+        (job) => job.stemLower === lowerName && (!job.saveDir || job.saveDir === effectiveSaveDir.toLowerCase())
+      )
+    if (nameTaken) effectiveSaveName = `${effectiveSaveName}_${taskId.slice(0, 4)}`
+  }
+
   const baseTmpDir = options.tmpDir || settings.tmpDir || defaultTmpDir
   // 每个任务使用独立的临时子目录：并发任务互不干扰，且清理时只删除本任务目录
   const effectiveTmpDir = join(baseTmpDir, `task-${taskId}`)
-  const effectiveLogFilePath = options.logFilePath || settings.logFilePath || defaultLogFilePath
-  // url 一并归一化为 trim 后的值；tmpDir 覆盖为按任务派生的隔离目录
-  options = { ...options, url: requestUrl, saveDir: effectiveSaveDir, tmpDir: effectiveTmpDir, logFilePath: effectiveLogFilePath }
+  // 日志同样按任务隔离：共享同一文件时多进程并发写入会互相交错。
+  // 显式传入的 options.logFilePath（单任务指定）保持原样；否则从配置/默认路径派生独立文件，
+  // 保留用户配置的目录与文件名前缀（N_m3u8DL-RE → N_m3u8DL-RE_a1b2c3d4.log）
+  const configuredLogFilePath = options.logFilePath || settings.logFilePath || defaultLogFilePath
+  const effectiveLogFilePath = options.logFilePath || deriveTaskLogPath(configuredLogFilePath, taskId)
+  // url 一并归一化为 trim 后的值；saveName 覆盖为唯一化后的值；tmpDir 覆盖为按任务派生的隔离目录
+  options = { ...options, url: requestUrl, saveName: effectiveSaveName || undefined, saveDir: effectiveSaveDir, tmpDir: effectiveTmpDir, logFilePath: effectiveLogFilePath }
 
   ensureDir(effectiveSaveDir)
   ensureDir(baseTmpDir)
@@ -542,36 +851,34 @@ export function startDownload(options: DownloadOptions, mainWindow: BrowserWindo
   }, 1000)
   ;(task as any)._speedTimer = speedTimer
 
-  // 解析 stdout
-  let stdoutBuffer = ''
+  // 解析 stdout/stderr：按字节攒行 + 自适应字符集解码（GBK/UTF-8），
+  // 修复重定向下中文日志乱码与多字节字符被 chunk 截断的问题
+  const stdoutReader = new CliLineReader()
+  const stderrReader = new CliLineReader()
+
   child.stdout?.on('data', (data: Buffer) => {
-    stdoutBuffer += data.toString()
-    const lines = stdoutBuffer.split(/\r?\n/)
-    stdoutBuffer = lines.pop() || ''
-
-    for (const line of lines) {
+    for (const line of stdoutReader.push(data)) {
       if (line.trim()) {
         parseOutput(taskId, line, mainWindow)
       }
     }
   })
 
-  // 解析 stderr
-  let stderrBuffer = ''
   child.stderr?.on('data', (data: Buffer) => {
-    stderrBuffer += data.toString()
-    const lines = stderrBuffer.split(/\r?\n/)
-    stderrBuffer = lines.pop() || ''
-
-    for (const line of lines) {
+    for (const line of stderrReader.push(data)) {
       if (line.trim()) {
         parseOutput(taskId, line, mainWindow)
       }
     }
   })
 
-  // 任务结束（正常退出或被终止）：统一收尾
+  // 任务结束（正常退出或被终止）：冲出残留缓冲后统一收尾
   child.on('close', (code) => {
+    for (const line of [...stdoutReader.end(), ...stderrReader.end()]) {
+      if (line.trim()) {
+        parseOutput(taskId, line, mainWindow)
+      }
+    }
     finalizeTask(taskId, code)
   })
 
@@ -697,7 +1004,7 @@ function cleanupSharedTmpDir(tmpDir: string, stem: string, deleted: string[], sk
   }
 
   for (const entry of entries) {
-    if (!stem || !entry.name.includes(stem)) continue
+    if (!stem || !artifactStemRegex(stem).test(entry.name)) continue
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
       removeGuarded(full, deleted, skipped)
@@ -774,6 +1081,28 @@ export function deleteTaskArtifacts(taskId: string, taskInfo: any = {}): DeleteO
           skipped.push({ path: candidate, reason: '删除失败' })
         }
       }
+
+      // 数字分片产物（<stem>_00.ts / <stem>_01.mkv 等）不在精确名单内，
+      // 按带边界正则补充扫描已知媒体/元数据扩展名；非白名单扩展名不碰
+      const candidateRegexes = [artifactStemRegex(stem)]
+      if (baseName !== stem) candidateRegexes.push(artifactStemRegex(baseName))
+      const knownExtensions = new Set(ARTIFACT_SUFFIXES.map((s) => s.toLowerCase()))
+      try {
+        for (const entry of readdirSync(saveDir, { withFileTypes: true })) {
+          if (!entry.isFile()) continue
+          const dotIndex = entry.name.lastIndexOf('.')
+          const ext = dotIndex >= 0 ? entry.name.slice(dotIndex).toLowerCase() : ''
+          if (!knownExtensions.has(ext)) continue
+          if (!candidateRegexes.some((regex) => regex.test(entry.name))) continue
+          const fullPath = join(saveDir, entry.name)
+          try {
+            rmSync(fullPath, { force: true })
+            deleted.push(fullPath)
+          } catch {
+            skipped.push({ path: fullPath, reason: '删除失败' })
+          }
+        }
+      } catch {}
     }
   }
 
@@ -1166,21 +1495,27 @@ function parseOutput(taskId: string, line: string, mainWindow: BrowserWindow | n
   const task = activeTasks.get(taskId)
   if (!task) return
 
-  const clean = line.replace(/\x1b\[[0-9;]*m/g, '').replace(/\r/g, '').trim()
+  // 全量剥离 ANSI 转义（颜色/光标/OSC）与控制字符，避免残留 "[2K" 类乱码
+  const clean = sanitizeCliText(line).trim()
   if (!clean) return
 
-  appendTaskLog(task, clean)
-  task.latestLog = clean
+  // 归一化 CLI 自带日志前缀："08:32:22.466 WARN : xxx" → "[WARN] xxx"，
+  // 避免与渲染端逐条记录的本地接收时间重复，单行预览也更干净
+  const prefixMatch = clean.match(RE_CLI_LOG_PREFIX)
+  const normalized = prefixMatch ? `[${prefixMatch[1]}] ${clean.slice(prefixMatch[0].length)}` : clean
+
+  appendTaskLog(task, normalized)
+  task.latestLog = normalized
 
   let level = 'INFO'
-  if (clean.includes('[ERROR]') || /\bError\b/i.test(clean)) level = 'ERROR'
-  else if (clean.includes('[WARN]') || /\bWarn\b/i.test(clean)) level = 'WARN'
-  else if (clean.includes('[DEBUG]')) level = 'DEBUG'
+  if (normalized.includes('[ERROR]') || /\bError\b/i.test(normalized)) level = 'ERROR'
+  else if (normalized.includes('[WARN]') || /\bWarn\b/i.test(normalized)) level = 'WARN'
+  else if (normalized.includes('[DEBUG]')) level = 'DEBUG'
 
   mainWindow?.webContents.send('download:log', {
     taskId,
     level,
-    message: clean
+    message: normalized
   })
 
   const segmentSummaryMatch = clean.match(/(?:^|\||\s)(\d+)\s+segments?\b/i)

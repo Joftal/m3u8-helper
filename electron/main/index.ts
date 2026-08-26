@@ -3,7 +3,7 @@ import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from '../ipc-handlers'
 import { getStore, initStore } from '../store'
-import { interruptOrphanedRuntimeTasks, countActiveRecordTasks, cancelAllRecordTasks, sweepOrphanedEmptyTmpDirs } from '../downloader'
+import { interruptOrphanedRuntimeTasks, countActiveRecordTasks, cancelAllRecordTasks, sweepOrphanedEmptyTmpDirs, setActiveMainWindow } from '../downloader'
 import { initScheduler } from '../scheduler'
 
 let mainWindow: BrowserWindow | null = null
@@ -176,6 +176,8 @@ if (!app.requestSingleInstanceLock()) {
     sweepOrphanedEmptyTmpDirs()
     registerWindowControls()
     createWindow()
+    // 启动恢复触发的后台动作（转封装等）需要窗口引用才能反馈到渲染端
+    setActiveMainWindow(mainWindow)
     registerIpcHandlers(mainWindow)
     initScheduler(mainWindow)
 

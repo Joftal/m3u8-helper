@@ -19,6 +19,8 @@ export interface ElectronAPI {
     onProgress: (callback: (data: any) => void) => () => void
     onLog: (callback: (data: any) => void) => () => void
     onComplete: (callback: (data: any) => void) => () => void
+    /** 录制任务 TS 中间产物自动转封装完成（outputs 为产出的 MKV 列表） */
+    onRemuxDone: (callback: (data: { taskId: string; outputs: string[]; attempted: number }) => void) => () => void
   }
   settings: {
     set: (key: string, value: any) => Promise<{ success: boolean }>
