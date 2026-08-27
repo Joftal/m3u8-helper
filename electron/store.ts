@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { join, dirname } from 'path'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { DEFAULT_LOCALE } from '../src/constants/locales'
 import { sanitizeSettings } from '../src/utils/validators'
 import { registerProtectedPath } from './path-safety'
 
@@ -64,6 +65,7 @@ const defaultLogFilePath = join(defaultLogDir, 'N_m3u8DL-RE.log')
 
 const defaults = {
   settings: {
+    language: DEFAULT_LOCALE,
     exePath: '',
     ffmpegPath: '',
     mp4decryptPath: '',
@@ -221,8 +223,8 @@ export function initStore(): void {
 
   const loadedSettings = sanitizeSettings(readCategoryJson('settings', JSON.parse(JSON.stringify(defaultSettings))))
 
-  // 清理已废弃的历史配置键
-  const legacyKeys: string[] = ['theme', 'language']
+  // 语言设置是当前配置的一部分，不再视为历史遗留键；保留并持久化
+  const legacyKeys: string[] = ['theme']
   let prunedLegacy = false
   for (const key of legacyKeys) {
     if (Object.prototype.hasOwnProperty.call(loadedSettings, key)) {

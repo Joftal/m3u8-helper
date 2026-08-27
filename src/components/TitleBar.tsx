@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Copy, Minus, Square, X } from 'lucide-react'
+import { useTranslation } from '@/i18n'
 
 export default function TitleBar() {
   const [isMaximized, setIsMaximized] = useState(false)
+  const { t } = useTranslation()
   const appIcon = new URL('../assets/icon.png', import.meta.url).href
 
   useEffect(() => {
@@ -21,8 +23,8 @@ export default function TitleBar() {
         <button
           onClick={() => window.api.window.minimize()}
           className="flex h-8 w-8 items-center justify-center rounded-md text-slate-600 dark:text-neutral-300 transition-colors hover:bg-slate-200 dark:hover:bg-neutral-700 hover:text-slate-800 dark:hover:text-slate-100"
-          aria-label="最小化"
-          title="最小化"
+          aria-label={t('common.minimize')}
+          title={t('common.minimize')}
         >
           <Minus size={14} strokeWidth={2.5} />
         </button>
@@ -30,8 +32,8 @@ export default function TitleBar() {
         <button
           onClick={() => window.api.window.maximize()}
           className="flex h-8 w-8 items-center justify-center rounded-md text-slate-600 dark:text-neutral-300 transition-colors hover:bg-slate-200 dark:hover:bg-neutral-700 hover:text-slate-800 dark:hover:text-slate-100"
-          aria-label={isMaximized ? '还原' : '最大化'}
-          title={isMaximized ? '还原' : '最大化'}
+          aria-label={isMaximized ? t('common.restoreWindow') : t('common.maximize')}
+          title={isMaximized ? t('common.restoreWindow') : t('common.maximize')}
         >
           {isMaximized ? <Copy size={14} strokeWidth={2.25} /> : <Square size={12} strokeWidth={2.25} />}
         </button>
@@ -39,8 +41,8 @@ export default function TitleBar() {
         <button
           onClick={() => window.api.window.close()}
           className="flex h-8 w-8 items-center justify-center rounded-md text-slate-600 dark:text-neutral-300 transition-colors hover:bg-red-500 hover:text-white"
-          aria-label="关闭"
-          title="关闭"
+          aria-label={t('common.close')}
+          title={t('common.close')}
         >
           <X size={14} strokeWidth={2.5} />
         </button>

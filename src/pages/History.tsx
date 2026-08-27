@@ -3,21 +3,25 @@ import { useNavigate } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { motion } from 'framer-motion'
 import { Trash2, Search, RotateCcw, FolderOpen, FileOutput } from 'lucide-react'
+import { DEFAULT_LOCALE, normalizeLocale } from '../constants/locales'
 import { useHistoryStore } from '@/store/historyStore'
 import { useSettingsStore } from '@/store/settingsStore'
 import { useDownloadStore } from '@/store/downloadStore'
 import Modal from '@/components/Modal'
 import { showToast } from '@/components/Toast'
+import { useTranslation } from '@/i18n'
 import { formatDateTime, formatDuration, formatFileSize, extractFileName, generateId } from '@/utils/format'
-import { STATUS_ICON_META, TASK_STATUS_META, HISTORY_STATUS_FILTERS, type HistoryStatusFilter } from '@/utils/status'
+import { STATUS_ICON_META, getTaskStatusMeta, type HistoryStatusFilter } from '@/utils/status'
 import { buildTaskOptions, createTaskRecord } from '@/utils/taskOptions'
 import { RECORD_TASK_DEFAULTS } from '@/utils/recording'
 import type { HistoryRecord } from '@/types/download'
 
 export default function History() {
+  const { t } = useTranslation()
   const { records, loaded, loadHistory, removeRecord, clearHistory } = useHistoryStore()
   const { settings } = useSettingsStore()
   const navigate = useNavigate()
+  const taskStatusMeta = getTaskStatusMeta(normalizeLocale(settings.language, DEFAULT_LOCALE))
 
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<HistoryStatusFilter>('all')
@@ -49,16 +53,16 @@ export default function History() {
   const copyText = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text)
-      showToast('info', '链接已复制到剪贴板')
+      showToast('info', t('history.copied'))
     } catch {
-      showToast('error', '复制失败')
+      showToast('error', t('history.copyFailed'))
     }
   }
 
   const handleRedownload = async (record: HistoryRecord) => {
     if (redownloadId) return
     if (!/^https?:\/\//i.test(record.url)) {
-      showToast('error', '记录中的链接不可用')
+      showToast('error', t('history.invalidUrl'))
       return
     }
 
@@ -66,7 +70,7 @@ export default function History() {
     const busy = useDownloadStore.getState().tasks.some((t) =>
       t.url === record.url && (t.status === 'pending' || t.status === 'running'))
     if (busy) {
-      showToast('info', '该链接已有进行中的任务')
+      showToast('info', t('history.busy'))
       return
     }
 
@@ -81,7 +85,7 @@ export default function History() {
     try {
       const result = await window.api.download.start(options)
       if (!result?.success) {
-        showToast('error', `启动失败: ${result?.error || '未知错误'}`)
+        showToast('error', t('history.startFailed').replace('{error}', String(result?.error || t('common.unknownError'))))
         return
       }
 
@@ -97,7 +101,7 @@ export default function History() {
       })
       useDownloadStore.getState().addTask(task)
       useDownloadStore.getState().setActiveTask(taskId)
-      showToast('success', isRecordEntry ? '已重新发起录制' : '已重新发起下载')
+      showToast('success', isRecordEntry ? t('history.redownloadRecord') : t('history.redownload'))
       // 携带目标 Tab：录制条目还原的任务在「录制任务」页签下
       navigate('/', { state: { tab: isRecordEntry ? 'record' : 'download' } })
     } finally {
@@ -107,82 +111,89 @@ export default function History() {
 
   const handleOpenFolder = async (record: HistoryRecord) => {
     if (!record.outputPath) {
-      showToast('info', '该记录没有保存位置信息')
+      showToast('info', t('history.noOutputPath'))
       return
     }
     const error = await window.api.shell.openPath(record.outputPath)
     if (error) {
-      showToast('error', `打开失败: ${error}`)
+      showToast('error', t('history.openFolderFailed').replace('{error}', String(error)))
     } else {
-      showToast('success', '已打开所在文件夹')
+      showToast('success', t('history.folderOpened'))
     }
   }
 
   const exportRecords = () => {
     if (filteredRecords.length === 0) {
-      showToast('info', '没有可导出的记录')
+      showToast('info', t('history.noExport'))
       return
     }
 
     const rows = filteredRecords.map((r) => ({
-      '名称': r.saveName,
-      '类型': r.kind === 'record' ? '录制' : '下载',
-      '状态': TASK_STATUS_META[r.status].label,
-      '开始时间': formatDateTime(r.startTime),
-      '耗时(秒)': r.duration,
-      '大小(字节)': r.fileSize,
-      '保存位置': r.outputPath,
-      '链接': r.url
+      [t('home.taskName')]: r.saveName,
+      [t('history.recordType')]: r.kind === 'record' ? t('history.typeRecord') : t('history.typeDownload'),
+      [t('history.status')]: taskStatusMeta[r.status].label,
+      [t('history.startedAt')]: formatDateTime(r.startTime),
+      [t('history.durationSeconds')]: r.duration,
+      [t('history.fileSizeBytes')]: r.fileSize,
+      [t('history.outputPath')]: r.outputPath,
+      [t('history.url')]: r.url
     }))
     const worksheet = XLSX.utils.json_to_sheet(rows)
     const workbook = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(workbook, worksheet, '任务记录')
+    XLSX.utils.book_append_sheet(workbook, worksheet, t('history.exportSheet'))
     // 文件名使用本地日期：toISOString 是 UTC，跨时区临近午夜时会偏移一天
     const now = new Date()
     const pad = (n: number) => String(n).padStart(2, '0')
     XLSX.writeFile(workbook, `m3u8-helper-records-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}.xlsx`)
-    showToast('success', `已导出 ${rows.length} 条记录`)
+    showToast('success', t('history.exportDone').replace('{count}', String(rows.length)))
   }
 
   const filterCount = (key: HistoryStatusFilter): number =>
     key === 'all' ? statusCounts.total : statusCounts[key]
 
+  const statusFilters = [
+    { key: 'all', label: t('history.filterAll') },
+    { key: 'completed', label: t('history.filterCompleted') },
+    { key: 'failed', label: t('history.filterFailed') },
+    { key: 'cancelled', label: t('history.filterCancelled') }
+  ] as const
+
   return (
     <div className="flex flex-1 flex-col gap-6">
       <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="page-header">
         <div>
-          <div className="page-kicker">History</div>
-          <h1 className="page-title">任务记录</h1>
+          <div className="page-kicker">{t('history.pageKicker')}</div>
+          <h1 className="page-title">{t('history.pageTitle')}</h1>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={exportRecords} disabled={filteredRecords.length === 0}
             className="btn-secondary flex items-center gap-1.5 text-xs font-semibold" >
-            <FileOutput size={14} /> 导出
+            <FileOutput size={14} /> {t('history.export')}
           </button>
           <button onClick={() => setShowClearConfirm(true)} disabled={records.length === 0}
             className="btn-secondary flex items-center gap-1.5 text-xs font-semibold">
-            <Trash2 size={14} /> 清空
+            <Trash2 size={14} /> {t('history.clear')}
           </button>
         </div>
       </motion.div>
 
-      <Modal open={showClearConfirm} onClose={() => setShowClearConfirm(false)} title="清空任务记录" width="max-w-md">
+      <Modal open={showClearConfirm} onClose={() => setShowClearConfirm(false)} title={t('history.clearConfirmTitle')} width="max-w-md">
         <div className="space-y-4">
           <div className="rounded-xl border border-amber-200 dark:border-amber-500/20 bg-amber-50 dark:bg-amber-500/10 px-3 py-2.5 text-sm leading-6 text-amber-800 dark:text-amber-300">
-            将删除全部 {records.length} 条历史记录，操作不可撤销。已下载的文件不受影响。
+            {t('history.clearConfirmText').replace('{count}', String(records.length))}
           </div>
           <div className="flex items-center justify-end gap-2 pt-1">
             <button onClick={() => setShowClearConfirm(false)}
               className="rounded-lg border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3.5 py-2 text-sm font-medium text-slate-300 dark:text-neutral-600 transition hover:bg-slate-100 dark:hover:bg-neutral-800 hover:bg-slate-50 dark:hover:bg-neutral-800/60">
-              取消
+              {t('common.cancel')}
             </button>
             <button onClick={async () => {
               const ok = await clearHistory()
               setShowClearConfirm(false)
-              ok ? showToast('success', '历史记录已清空') : showToast('error', '清空失败，请重试')
+              ok ? showToast('success', t('history.historyCleared')) : showToast('error', t('history.clearHistoryFailed'))
             }}
               className="rounded-lg border border-red-200 dark:border-red-500/20 bg-red-600 px-3.5 py-2 text-sm font-medium text-white transition">
-              确认清空
+              {t('history.clearConfirmTitle')}
             </button>
           </div>
         </div>
@@ -193,11 +204,11 @@ export default function History() {
           <div className="relative flex-1">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 dark:text-neutral-400" />
             <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="搜索名称 / 链接 / 保存位置..." className="input-field pl-9" />
+             placeholder={t('history.searchPlaceholder')} className="input-field pl-9" />
           </div>
         </div>
         <div className="mt-2.5 flex flex-wrap gap-1.5">
-          {HISTORY_STATUS_FILTERS.map(({ key, label }) => {
+          {statusFilters.map(({ key, label }) => {
             const active = statusFilter === key
             return (
               <button key={key} onClick={() => setStatusFilter(key)}
@@ -218,7 +229,7 @@ export default function History() {
         {filteredRecords.length === 0 ? (
           <div className="card flex flex-1 flex-col items-center justify-center p-12 text-center">
             <span className="text-5xl leading-none">🕘</span>
-            <p className="text-sm text-slate-500 dark:text-neutral-400">{records.length === 0 ? '暂无下载记录' : '没有匹配的记录'}</p>
+           <p className="text-sm text-slate-500 dark:text-neutral-400">{records.length === 0 ? t('history.noRecords') : t('history.noMatches')}</p>
           </div>
         ) : (
           filteredRecords.map((record, index) => (
@@ -234,7 +245,7 @@ export default function History() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="truncate text-sm font-semibold text-slate-800 dark:text-neutral-100">{record.saveName}</span>
-                    <span title={TASK_STATUS_META[record.status].label} className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
+                    <span title={taskStatusMeta[record.status].label} className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
                       {(() => {
                         const Meta = STATUS_ICON_META[record.status]
                         return <Meta.Icon size={14} className={Meta.className} />
@@ -242,13 +253,13 @@ export default function History() {
                     </span>
                   </div>
                   <p className="mt-0.5 cursor-pointer truncate text-xs text-slate-500 dark:text-neutral-400 hover:text-blue-600 dark:hover:text-blue-400"
-                    title="点击复制链接"
+                    title={t('history.copyLink')}
                     onClick={() => copyText(record.url)}>
                     {record.url}
                   </p>
                   <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px] text-slate-500 dark:text-neutral-400">
                     <span>{formatDateTime(record.startTime)}</span>
-                    {record.duration > 0 && <span>耗时 {formatDuration(record.duration)}</span>}
+                    {record.duration > 0 && <span>{t('history.durationLabel')} {formatDuration(record.duration)}</span>}
                     {record.fileSize > 0 && <span>{formatFileSize(record.fileSize)}</span>}
                     {record.outputPath && (
                       <button onClick={() => handleOpenFolder(record)}
@@ -261,20 +272,20 @@ export default function History() {
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
                   <button onClick={() => handleRedownload(record)}
-                    title={record.kind === 'record' ? '使用当前设置重新录制' : '使用当前设置重新下载'}
+                    title={record.kind === 'record' ? t('history.redownloadRecordTooltip') : t('history.redownloadTooltip')}
                     disabled={redownloadId !== null}
                     className={`flex h-7 w-7 items-center justify-center rounded-md text-slate-400 dark:text-neutral-500 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${record.kind === 'record' ? 'hover:bg-red-50 dark:hover:bg-red-500/15 hover:text-red-500 dark:hover:text-red-400 dark:hover:bg-red-500/10 dark:hover:text-red-400' : 'hover:bg-emerald-50 dark:hover:bg-emerald-500/15 hover:text-emerald-600 dark:hover:text-emerald-400 dark:hover:bg-emerald-500/10 dark:hover:text-emerald-400'}`}>
                     <RotateCcw size={13} />
                   </button>
-                  <button onClick={() => handleOpenFolder(record)} title="打开所在文件夹"
+                  <button onClick={() => handleOpenFolder(record)} title={t('history.openFolderTooltip')}
                     className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 dark:text-neutral-400 transition-colors bg-blue-50 dark:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400">
                     <FolderOpen size={13} />
                   </button>
                   <button onClick={async () => {
                     const ok = await removeRecord(record.id)
-                    ok ? showToast('success', '记录已删除') : showToast('error', '删除失败，请重试')
+                    ok ? showToast('success', t('history.recordDeleted')) : showToast('error', t('history.deleteRecordFailed'))
                   }}
-                    title="删除记录"
+                    title={t('history.deleteRecordTooltip')}
                     className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 dark:text-neutral-400 transition-colors bg-red-50/40 dark:bg-red-500/10 bg-red-50 dark:bg-red-500/10 hover:text-red-500 dark:hover:text-red-400">
                     <Trash2 size={13} />
                   </button>

@@ -2,7 +2,13 @@
  * 应用设置 — 与 N_m3u8DL-RE CLI 参数对应
  * 参考: CommandInvoker.cs + MyOption.cs
  */
+import type { SupportedLocale } from '../constants/locales'
+
+export type Language = SupportedLocale
+
 export interface AppSettings {
+  language: Language
+
   // 工具路径
   exePath: string
   ffmpegPath: string

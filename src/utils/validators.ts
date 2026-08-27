@@ -1,3 +1,5 @@
+import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from '../constants/locales'
+
 const WINDOWS_DRIVE = /^[a-zA-Z]:[\\/]/
 const UNIX_ABSOLUTE = /^\//
 const TILDE_ABSOLUTE = /^~[\\/]/
@@ -42,6 +44,15 @@ export function validateSettingValue(key: string, value: unknown): { valid: bool
     case 'keyTextFile': {
       if (typeof normalized !== 'string') return { valid: false, value: '', message: '字段必须为字符串' }
       return { valid: normalized.trim() === '' || isValidPathLike(normalized.trim()), value: normalized.trim(), message: normalized.trim() && !isValidPathLike(normalized.trim()) ? '路径格式不合法' : undefined }
+    }
+
+    case 'language': {
+      const text = typeof normalized === 'string' ? normalized.toLowerCase() : DEFAULT_LOCALE
+      return {
+        valid: SUPPORTED_LOCALES.includes(text as (typeof SUPPORTED_LOCALES)[number]),
+        value: text as (typeof SUPPORTED_LOCALES)[number],
+        message: `语言必须为 ${SUPPORTED_LOCALES.join(' 或 ')}`
+      }
     }
 
     case 'savePattern':

@@ -1,8 +1,10 @@
 import { create } from 'zustand'
+import { DEFAULT_LOCALE } from '../constants/locales'
 import type { AppSettings } from '@/types/settings'
 import { validateSettingValue, validateSettings } from '@/utils/validators'
 
 export const defaultSettings: AppSettings = {
+  language: DEFAULT_LOCALE,
   exePath: '',
   ffmpegPath: '',
   mp4decryptPath: '',
@@ -52,6 +54,7 @@ export const defaultSettings: AppSettings = {
 }
 
 export const resetExcludedKeys = [
+  'language',
   'exePath',
   'ffmpegPath',
   'mp4decryptPath',
@@ -117,11 +120,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
   resetSettings: async () => {
     // 重置逻辑以主进程 store.resetSettings 为唯一实现，渲染端仅采纳其返回的权威配置
+    const previousLanguage = get().settings.language
     const result = await window.api.settings.resetAll([...resetExcludedKeys])
     if (result?.success && result.settings) {
       const sanitized = validateSettings(result.settings as unknown as Record<string, unknown>).settings as unknown as AppSettings
-      // 剔除式净化可能缺少个别键，合并默认值保证形状完整
-      set({ settings: { ...defaultSettings, ...sanitized }, loaded: true })
+      // 剔除式净化可能缺少个别键，合并默认值保证形状完整；保留用户当前语言偏好。
+      set({ settings: { ...defaultSettings, ...sanitized, language: previousLanguage }, loaded: true })
     }
   }
 }))

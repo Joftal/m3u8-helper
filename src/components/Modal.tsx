@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X } from 'lucide-react'
+import { useTranslation } from '@/i18n'
 
 interface ModalProps {
   open: boolean
@@ -15,6 +16,7 @@ const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:
 
 export default function Modal({ open, onClose, title, children, width = 'max-w-lg' }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null)
+  const { t } = useTranslation()
 
   useEffect(() => {
     if (!open) return
@@ -86,7 +88,7 @@ export default function Modal({ open, onClose, title, children, width = 'max-w-l
               ref={panelRef}
               role="dialog"
               aria-modal="true"
-              aria-label={title || '对话框'}
+              aria-label={title || t('common.dialog')}
               tabIndex={-1}
               className={`bg-white dark:bg-neutral-900 rounded-xl border border-gray-100 dark:border-gray-700/60 ${width} w-full overflow-hidden outline-none`}
               style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.12)' }}
@@ -96,7 +98,7 @@ export default function Modal({ open, onClose, title, children, width = 'max-w-l
                   <h2 className="text-base font-semibold text-gray-900 dark:text-gray-50">{title}</h2>
                   <button
                     onClick={onClose}
-                    aria-label="关闭"
+                    aria-label={t('common.close')}
                     className="w-7 h-7 rounded-md flex items-center justify-center text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
                   >
                     <X size={16} />

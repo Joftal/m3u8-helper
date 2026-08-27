@@ -18,9 +18,10 @@ import { useHistoryStore } from '@/store/historyStore'
 import { useSettingsStore } from '@/store/settingsStore'
 import Modal from '@/components/Modal'
 import { showToast } from '@/components/Toast'
+import { useTranslation } from '@/i18n'
 import { extractFileName, extractUrlHost, formatDuration, formatFileSize, generateId } from '@/utils/format'
 import { isValidUrl } from '@/utils/validators'
-import { TASK_STATUS_META, STATUS_ICON_META } from '@/utils/status'
+import { getTaskStatusMeta, STATUS_ICON_META } from '@/utils/status'
 import { formatNetworkSpeed } from '@/utils/speed'
 import { buildTaskOptions } from '@/utils/taskOptions'
 import {
@@ -52,6 +53,8 @@ function getTaskRuntimeSeconds(startTime?: string): number {
 
 export default function Home() {
   const location = useLocation()
+  const { t, locale } = useTranslation()
+  const statusMeta = getTaskStatusMeta(locale)
   // 支持跨页跳转直达指定页签（如历史页"再次执行"录制条目 → 录制 Tab）
   const [activeTab, setActiveTab] = useState<'download' | 'record'>(() =>
     (location.state as { tab?: 'download' | 'record' } | null)?.tab === 'record' ? 'record' : 'download'
@@ -93,6 +96,7 @@ export default function Home() {
   const [isBatchRunning, setIsBatchRunning] = useState(false)
   const [deleteConfirmTask, setDeleteConfirmTask] = useState<DownloadTask | null>(null)
   const batchFileInputRef = useRef<HTMLInputElement | null>(null)
+  const formatApproxSize = (bytes: number) => `(${t('common.approx')} ${formatFileSize(bytes)})`
   // 批量队列用：任务结束时通过 download:complete 事件释放并发槽位
   const completionResolvers = useRef(new Map<string, () => void>())
   // 批量队列整体停止标志
@@ -164,7 +168,7 @@ export default function Home() {
           totalBytes: typeof data.totalBytes === 'number' ? data.totalBytes : task.totalBytes,
           etaSeconds: typeof data.etaSeconds === 'number' ? data.etaSeconds : task.etaSeconds,
           currentFrameRate: typeof data.currentFrameRate === 'number' ? data.currentFrameRate : task.currentFrameRate,
-          latestLog: data.latestLog || task.latestLog || '任务已完成',
+          latestLog: data.latestLog || task.latestLog || t('status.completed'),
           endTime: new Date().toISOString()
         })
 
@@ -173,9 +177,9 @@ export default function Home() {
         // - 取消即“停止并保存”，在此统一播报，替代停止按钮点击时的抢跑文案
         if (isRecordTask(task)) {
           if (data.status === 'failed') {
-            showToast('error', `录制「${task.saveName || task.url}」异常终止，已录内容已保留`)
+            showToast('error', t('home.recordAborted').replace('{name}', task.saveName || task.url))
           } else if (data.status === 'cancelled') {
-            showToast('info', '录制已停止，已录内容已保存')
+            showToast('info', t('home.recordStoppedSaved'))
           }
         }
 
@@ -219,9 +223,9 @@ export default function Home() {
     const offRemux = window.api.download.onRemuxDone((data) => {
       if (!data || data.attempted <= 0) return
       if (data.outputs.length > 0) {
-        showToast('success', `录制内容已自动转封装为 MKV（${data.outputs.length} 个文件）`)
+        showToast('success', t('home.remuxSuccess').replace('{count}', String(data.outputs.length)))
       } else {
-        showToast('error', '录制内容转封装失败，已保留原始 TS 文件，请检查 ffmpeg 设置')
+        showToast('error', t('home.remuxFailed'))
       }
     })
 
@@ -237,6 +241,9 @@ export default function Home() {
   const downloadTasks = tasks.filter((task) => !isRecordTask(task))
   const recordTasks = tasks.filter((task) => isRecordTask(task))
   const visibleTasks = activeTab === 'download' ? downloadTasks : recordTasks
+  const emptyTaskType = activeTab === 'download' ? t('home.downloadTask') : t('home.recordTask')
+  const emptyStateText = t('home.noTasks').replace('{type}', emptyTaskType)
+  const emptyStateHint = t('home.noTasksHint').replace('{type}', emptyTaskType)
 
   // 录制计时 ticker：仅在录制 Tab 可见且存在活跃录制任务时运行，
   // 驱动基于 startTime 的已录时长刷新（下载 Tab 期间录制 UI 不可见，无需空转重渲染）
@@ -257,12 +264,13 @@ export default function Home() {
   const parseLiveLimitSeconds = (task: DownloadTask): number => getRecordLimitSeconds(task)
 
   const getTaskActionMessage = (
-    action: '取消' | '重试' | '删除',
+    action: 'cancel' | 'retry' | 'delete',
     outcome: 'success' | 'error' | 'info',
     detail: string
   ) => {
-    const label = outcome === 'error' ? '失败' : '成功'
-    return `${action}${label}：${detail}`
+    const actionText = t(`home.taskAction.${action}`)
+    const resultText = outcome === 'error' ? t('home.taskAction.failed') : t('home.taskAction.success')
+    return `${actionText}${resultText}：${detail}`
   }
 
   const handleDownloadUrlChange = (value: string) => {
@@ -281,20 +289,20 @@ export default function Home() {
           setRecordUrl(text)
           if (!recordName) setRecordName(extractFileName(text))
         }
-        showToast('info', '已从剪贴板粘贴 URL')
+        showToast('info', t('home.clipboardPasteSuccess'))
       }
     } catch {
-      showToast('error', '无法读取剪贴板内容')
+      showToast('error', t('home.clipboardReadFailed'))
     }
   }
 
   const handleDownloadStart = async () => {
     if (!downloadUrl.trim()) {
-      showToast('error', '请输入下载链接')
+      showToast('error', t('home.downloadUrlRequired'))
       return
     }
     if (!isValidUrl(downloadUrl)) {
-      showToast('error', '请输入有效的 URL')
+      showToast('error', t('home.invalidUrl'))
       return
     }
 
@@ -313,7 +321,7 @@ export default function Home() {
 
     const result = await window.api.download.start(taskOptions)
     if (!result.success) {
-      showToast('error', `启动失败: ${result.error}`)
+      showToast('error', t('home.startFailed').replace('{error}', String(result.error)))
       setIsDownloading(false)
       return
     }
@@ -338,17 +346,17 @@ export default function Home() {
 
     addTask(task)
     setActiveTask(taskId)
-    showToast('success', '下载任务已启动')
+    showToast('success', t('home.downloadStarted'))
   }
 
   const handleRecordStart = async () => {
     const trimmedUrl = recordUrl.trim()
     if (!trimmedUrl) {
-      showToast('error', '请输入直播链接')
+      showToast('error', t('home.liveUrlRequired'))
       return
     }
     if (!isValidUrl(trimmedUrl)) {
-      showToast('error', '请输入有效的 http(s) 直播链接')
+      showToast('error', t('home.invalidLiveUrl'))
       return
     }
 
@@ -356,32 +364,32 @@ export default function Home() {
     const busy = useDownloadStore.getState().tasks.some((candidate) =>
       candidate.url === trimmedUrl && (candidate.status === 'pending' || candidate.status === 'running'))
     if (busy) {
-      showToast('info', '该链接已有进行中的任务')
+      showToast('info', t('home.taskExists'))
       return
     }
 
     // parseLiveLimitRaw 语义：-1 格式非法（含零时长）；-2 超出上限（7 天）
     const limitResult = parseLiveLimitRaw(liveRecordLimit)
     if (limitResult === -2) {
-      showToast('error', '录制时长限制不能超过 7 天')
+      showToast('error', t('home.maxLiveLimit'))
       return
     }
     if (limitResult < 0 && liveRecordLimit.trim()) {
-      showToast('error', '录制时长限制须大于 0，格式为 HH:mm:ss 或 mm:ss')
+      showToast('error', t('home.invalidLiveLimit'))
       return
     }
     const waitRaw = liveWaitTime.trim()
     if (waitRaw) {
       const wait = Number(waitRaw)
       if (!Number.isFinite(wait) || wait < 0) {
-        showToast('error', '刷新间隔必须为非负数字（秒）')
+        showToast('error', t('home.invalidWait'))
         return
       }
     }
     const takeRaw = liveTakeCount.trim()
     const takeCount = Number(takeRaw)
     if (takeRaw && (!Number.isInteger(takeCount) || takeCount < 1 || takeCount > 100)) {
-      showToast('error', '片段数必须为 1-100 的整数')
+      showToast('error', t('home.invalidTakeCount'))
       return
     }
 
@@ -409,7 +417,7 @@ export default function Home() {
     try {
       const result = await window.api.download.start(taskOptions)
       if (!result.success) {
-        showToast('error', `启动失败: ${result.error}`)
+        showToast('error', t('home.startFailed').replace('{error}', String(result.error)))
         return
       }
 
@@ -431,7 +439,7 @@ export default function Home() {
       }
 
       addTask(task)
-      showToast('success', '录制已开始')
+      showToast('success', t('home.recordingStarted'))
     } finally {
       setRecordStarting(false)
     }
@@ -441,7 +449,7 @@ export default function Home() {
     const lines = batchText.split('\n').map((line) => line.trim()).filter(Boolean)
     const validUrls = lines.filter(isValidUrl)
     if (validUrls.length === 0) {
-      showToast('error', '未找到有效的 URL')
+      showToast('error', t('home.noValidUrls'))
       return
     }
     const next = validUrls.map((url) => ({
@@ -452,7 +460,7 @@ export default function Home() {
       progress: 0
     }))
     setBatchItems(next)
-    showToast('success', `已解析 ${next.length} 个链接`)
+    showToast('success', t('home.parseUrlSuccess').replace('{count}', String(next.length)))
   }
 
   const appendImportedBatchItems = (rows: Array<{ name: string; url: string }>) => {
@@ -472,12 +480,12 @@ export default function Home() {
     })
 
     if (parsedRows.length === 0) {
-      showToast('error', '未找到可导入的下载链接，模板必须是 A 列名称 / B 列链接')
+      showToast('error', t('home.importTemplateError'))
       return
     }
 
     setBatchItems((prev) => [...prev, ...parsedRows])
-    showToast('success', `已导入 ${parsedRows.length} 个任务`)
+    showToast('success', t('home.importSuccess').replace('{count}', String(parsedRows.length)))
   }
 
   const normalizeImportCell = (value: string) => value
@@ -627,10 +635,10 @@ export default function Home() {
 
         appendImportedBatchItems(parsedRows)
       } else {
-        showToast('error', '仅支持 .txt .csv .tsv .xlsx .xls 文件导入')
+        showToast('error', t('home.importFormatError'))
       }
     } catch {
-      showToast('error', '导入失败：文件内容无法解析，请检查格式是否符合 A 列名称 / B 列链接')
+      showToast('error', t('home.importParseError'))
     } finally {
       event.target.value = ''
     }
@@ -657,7 +665,7 @@ export default function Home() {
 
   const startBatch = async () => {
     if (batchItems.length === 0) {
-      showToast('error', '请先添加下载链接')
+      showToast('error', t('home.noBatchUrls'))
       return
     }
 
@@ -707,12 +715,12 @@ export default function Home() {
     const aborted = batchAbortRef.current
     batchAbortRef.current = false
     setIsBatchRunning(false)
-    showToast(aborted ? 'info' : 'success', aborted ? '批量下载已停止，剩余任务保持待处理' : '批量下载已全部处理完成')
+    showToast(aborted ? 'info' : 'success', aborted ? t('home.batchStopped') : t('home.batchFinished'))
   }
 
   const stopBatch = () => {
     batchAbortRef.current = true
-    showToast('info', '正在停止批量任务，进行中的任务将继续完成…')
+    showToast('info', t('home.stoppingBatch'))
   }
 
   /**
@@ -758,7 +766,7 @@ export default function Home() {
         options: task.options || {}
       })
       if (!result?.success) {
-        return { success: false, message: result?.error || '清理失败：相关下载文件未能删除' }
+        return { success: false, message: result?.error || t('home.taskAction.cleanupFailed') }
       }
       removeTask(task.id)
       await window.api.runtime.remove(task.id)
@@ -769,18 +777,18 @@ export default function Home() {
         await removeRecord(task.id)
       }
       syncTaskRuntimeFlags()
-      return { success: true, message: '已删除相关下载文件和临时文件' }
+      return { success: true, message: t('home.taskAction.cleaned') }
     } catch {
-      return { success: false, message: '清理失败：相关下载文件未能删除' }
+      return { success: false, message: t('home.taskAction.cleanupFailed') }
     }
   }
 
   const handleTaskCancel = async (task: DownloadTask) => {
-    const actionText = '取消' as const
+    const actionText = 'cancel' as const
     try {
       const cancelResult = await window.api.download.cancel(task.id)
       if (!cancelResult?.success) {
-        showToast('error', getTaskActionMessage(actionText, 'error', '任务可能已结束，已下载文件未被清理'))
+        showToast('error', getTaskActionMessage(actionText, 'error', t('home.taskAction.alreadyFinished')))
         return
       }
 
@@ -808,16 +816,16 @@ export default function Home() {
       }
       syncTaskRuntimeFlags()
       showToast('info', cleanupResult.success
-        ? getTaskActionMessage(actionText, 'success', '已删除已下载文件和临时文件，记录标记为已取消')
-        : getTaskActionMessage(actionText, 'success', '已取消，但部分文件清理失败'))
+        ? getTaskActionMessage(actionText, 'success', t('home.taskAction.cancelledAndSaved'))
+        : getTaskActionMessage(actionText, 'success', t('home.taskAction.cancelledPartial')))
     } catch {
-      showToast('error', getTaskActionMessage(actionText, 'error', '任务未能正常终止，已下载文件未被清理'))
+      showToast('error', getTaskActionMessage(actionText, 'error', t('home.taskAction.notStopped')))
     }
   }
 
   /** 执行重试（录制任务须经 requestRetry 确认后才会进入这里） */
   const performRetry = async (task: DownloadTask) => {
-    const actionText = '重试' as const
+    const actionText = 'retry' as const
     const options = {
       ...(task.options || {}),
       url: task.url,
@@ -842,7 +850,7 @@ export default function Home() {
 
       const result = await window.api.download.start(options)
       if (!result?.success) {
-        showToast('error', getTaskActionMessage(actionText, 'error', result?.error || '未知错误'))
+        showToast('error', getTaskActionMessage(actionText, 'error', result?.error || t('common.unknownError')))
         return
       }
       const newTaskId = result.taskId || generateId()
@@ -858,30 +866,30 @@ export default function Home() {
         totalBytes: task.totalBytes || 0,
         etaSeconds: 0,
         endTime: undefined,
-        latestLog: `${actionText}中`,
+        latestLog: t('home.taskAction.retry'),
         startTime: new Date().toISOString(),
-        logs: [{ timestamp: new Date().toISOString(), level: 'INFO', message: `${actionText}中` }],
+        logs: [{ timestamp: new Date().toISOString(), level: 'INFO', message: t('home.taskAction.retry') }],
         options: result.options || options
       }
       addTask(recreated)
       setActiveTask(newTaskId)
-      showToast('success', getTaskActionMessage(actionText, 'success', '旧任务残留已清理，正在重新下载'))
+      showToast('success', getTaskActionMessage(actionText, 'success', t('home.taskAction.oldResidual')))
     } catch {
-      showToast('error', getTaskActionMessage(actionText, 'error', '无法重新启动任务，旧下载残留未清理'))
+      showToast('error', getTaskActionMessage(actionText, 'error', t('home.taskAction.cannotRestart')))
     }
   }
 
   const handleTaskDelete = async (task: DownloadTask) => {
-    const actionText = '删除' as const
+    const actionText = 'delete' as const
     try {
       const cleanupResult = await deleteTaskArtifactsAndCleanup(task)
       if (!cleanupResult.success) {
         showToast('error', getTaskActionMessage(actionText, 'error', cleanupResult.message))
         return
       }
-      showToast('success', getTaskActionMessage(actionText, 'success', '已清理相关下载文件和临时文件'))
+      showToast('success', getTaskActionMessage(actionText, 'success', t('home.taskAction.opened')))
     } catch {
-      showToast('error', getTaskActionMessage(actionText, 'error', '任务文件可能还在，未能完成清理'))
+      showToast('error', getTaskActionMessage(actionText, 'error', t('home.taskAction.taskFileMayExist')))
     } finally {
       setDeleteConfirmTask(null)
     }
@@ -895,11 +903,11 @@ export default function Home() {
   const openTaskFolder = async (task: DownloadTask) => {
     const dir = task.saveDir || settings.saveDir
     if (!dir) {
-      showToast('info', '没有保存位置信息')
+      showToast('info', t('home.noOutputPath'))
       return
     }
     const error = await window.api.shell.openPath(dir)
-    error ? showToast('error', `打开失败: ${error}`) : showToast('success', '已打开所在文件夹')
+    error ? showToast('error', t('home.openFolderFailed').replace('{error}', String(error))) : showToast('success', t('home.folderOpened'))
   }
 
   /** 录制卡片：原「监控面板 + 列表行」合并后的单一卡片，活跃录制自带计时与指标 */
@@ -931,7 +939,7 @@ export default function Home() {
               <h3 className="truncate text-[14px] font-semibold text-slate-800 dark:text-neutral-100" title={task.url}>{task.saveName || host || task.url}</h3>
               {!live && (
                 <span
-                  title={TASK_STATUS_META[task.status].label}
+                  title={statusMeta[task.status].label}
                   className="inline-flex h-5 w-5 shrink-0 items-center justify-center"
                 >
                   {(() => {
@@ -947,7 +955,7 @@ export default function Home() {
           {live && (
             <div className="shrink-0 text-right">
               <div className="font-mono text-xl font-bold tabular-nums tracking-tight text-slate-900 dark:text-neutral-50">{formatDuration(elapsed ?? 0)}</div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-red-500 dark:text-red-400">录制中</div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-red-500 dark:text-red-400">{t('home.recordingInProgress')}</div>
             </div>
           )}
         </div>
@@ -958,51 +966,48 @@ export default function Home() {
               <div className="h-full rounded-full bg-red-500 transition-all" style={{ width: `${limitPct}%` }} />
             </div>
             <div className="mt-0.5 flex justify-between text-[10px] text-slate-500 dark:text-neutral-400">
-              <span>限额 {task.options?.liveRecordLimit}</span>
-              {/* CLI 从真正拉流才开始计时限额，UI 计时到限不代表录制已结束 */}
-              <span>{remaining > 0 ? `剩余 ${formatDuration(remaining)}` : '已达时限，等待录制收尾…'}</span>
+              <span>{t('home.recordLimit')} {task.options?.liveRecordLimit}</span>
+              <span>{remaining > 0 ? t('home.taskAction.timeRemaining').replace('{time}', formatDuration(remaining)) : t('home.taskAction.timeLimitReached')}</span>
             </div>
           </div>
         )}
 
         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-0.5 font-mono text-[11px] tabular-nums text-slate-500 dark:text-neutral-400">
-          {captured > 0 && <span>已捕获 {formatFileSize(captured)}</span>}
-          {live && task.speed && task.speed !== '0 KB/s' && <span>实时 {task.speed}</span>}
-          {avgSpeed && <span>平均 {avgSpeed}</span>}
+          {captured > 0 && <span>{t('home.captured').replace('{size}', formatFileSize(captured))}</span>}
+          {live && task.speed && task.speed !== '0 KB/s' && <span>{t('home.liveSpeed').replace('{speed}', task.speed)}</span>}
+          {avgSpeed && <span>{t('home.avgSpeed').replace('{speed}', avgSpeed)}</span>}
           {!live && finishedDuration !== null && (
-            // 墙钟耗时而非媒体时长：回放型播放列表的下载速度快于实时，二者不等
-            <span title="录制墙钟耗时；非直播源下载快于实时时，会小于视频文件时长">耗时 {formatDuration(finishedDuration)}</span>
+            <span title={t('home.wallClockHint')}>{t('home.wallClockDuration').replace('{time}', formatDuration(finishedDuration))}</span>
           )}
         </div>
 
         <div className="mt-2.5 flex items-center justify-between gap-3 rounded-xl border border-slate-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-900/60 bg-white dark:bg-neutral-900 px-3 py-1.5">
           <div className="min-w-0 truncate text-[11px] text-slate-500 dark:text-neutral-400" title={task.saveDir || settings.saveDir}>
-            保存至 {task.saveDir || settings.saveDir || '默认下载目录'}
+            {t('home.saveTo')} {task.saveDir || settings.saveDir || t('home.saveToDefault')}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {(task.saveDir || settings.saveDir) && (
               <button onClick={() => openTaskFolder(task)}
                 className="rounded-md border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-2 py-1 text-[10px] font-medium text-slate-300 dark:text-neutral-600 hover:bg-slate-100 dark:hover:bg-neutral-800">
-                打开
+                {t('home.open')}
               </button>
             )}
             {live ? (
-              // 录制停止必须保留已录内容：直接取消进程，不走会删除产物的 handleTaskCancel
               <button onClick={() => stopRecording(task.id)} disabled={isCancelling}
                 className="rounded-md border border-red-200 dark:border-red-500/20 bg-red-50/40 dark:bg-red-500/10 px-2.5 py-1 text-[10px] font-semibold text-red-500 dark:text-red-400 disabled:cursor-not-allowed disabled:opacity-60">
-                {isCancelling ? '停止中…' : '停止'}
+                {isCancelling ? t('home.stopInProgress') : t('home.stop')}
               </button>
             ) : (
               <>
                 {task.status === 'failed' && (
                   <button onClick={() => requestRetry(task)}
                     className="rounded-md border border-emerald-200 dark:border-emerald-500/20 bg-emerald-50 dark:bg-emerald-500/10 px-2 py-1 text-[10px] font-medium text-emerald-500 dark:text-emerald-400">
-                    重试
+                    {t('home.retry')}
                   </button>
                 )}
                 <button onClick={() => openDeleteConfirm(task)}
                   className="rounded-md border border-red-200 dark:border-red-500/20 bg-red-50/40 dark:bg-red-500/10 px-2 py-1 text-[10px] font-medium text-red-500 dark:text-red-400">
-                  删除
+                  {t('home.delete')}
                 </button>
               </>
             )}
@@ -1018,7 +1023,7 @@ export default function Home() {
     const canCancel = task.status === 'running' || task.status === 'pending'
     const canRetry = task.status === 'failed' || task.status === 'cancelled'
     const canDelete = task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled'
-    const statusText = task.status === 'running' ? '下载中' : TASK_STATUS_META[task.status].label
+    const statusText = task.status === 'running' ? t('home.downloadInProgress') : statusMeta[task.status].label
     const StatusIcon = STATUS_ICON_META[task.status]
 
     return (
@@ -1049,21 +1054,21 @@ export default function Home() {
               disabled={!canCancel}
               className={`rounded-md border px-2 py-1 text-[10px] font-medium ${canCancel ? 'border-amber-200 dark:border-amber-500/20 bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-500/20' : 'cursor-not-allowed border-slate-200 dark:border-neutral-800 bg-slate-100 dark:bg-neutral-800 text-slate-400 dark:text-neutral-500'}`}
             >
-              取消
+              {t('home.taskAction.cancel')}
             </button>
             <button
               onClick={() => canRetry && requestRetry(task)}
               disabled={!canRetry}
               className={`rounded-md border px-2 py-1 text-[10px] font-medium ${canRetry ? 'border-emerald-200 dark:border-emerald-500/20 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-500/20' : 'cursor-not-allowed border-slate-200 dark:border-neutral-800 bg-slate-100 dark:bg-neutral-800 text-slate-400 dark:text-neutral-500'}`}
             >
-              重试
+              {t('home.taskAction.retry')}
             </button>
             <button
               onClick={() => canDelete && openDeleteConfirm(task)}
               disabled={!canDelete}
               className={`rounded-md border px-2 py-1 text-[10px] font-medium ${canDelete ? 'border-red-200 dark:border-red-500/20 bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20' : 'cursor-not-allowed border-slate-200 dark:border-neutral-800 bg-slate-100 dark:bg-neutral-800 text-slate-400 dark:text-neutral-500'}`}
             >
-              删除
+              {t('home.taskAction.delete')}
             </button>
           </div>
         </div>
@@ -1073,19 +1078,17 @@ export default function Home() {
 
   return (
     <div className="flex flex-1 flex-col gap-6">
-      <Modal open={Boolean(deleteConfirmTask)} onClose={() => setDeleteConfirmTask(null)} title="删除任务" width="max-w-md">
+      <Modal open={Boolean(deleteConfirmTask)} onClose={() => setDeleteConfirmTask(null)} title={t('home.deleteTask')} width="max-w-md">
         <div className="space-y-4">
           <div className="rounded-xl border border-slate-200 dark:border-neutral-800 bg-slate-50 dark:bg-neutral-800/60 px-3 py-2.5">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-neutral-400">任务名称</div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-neutral-400">{t('home.taskName')}</div>
             <div className="mt-1 truncate text-sm font-semibold text-slate-700 dark:text-neutral-200">{deleteConfirmTask?.saveName || deleteConfirmTask?.url || ''}</div>
           </div>
 
           <p className="text-sm leading-6 text-slate-300 dark:text-neutral-600">
-            删除后将同时清理{isRecordTask(deleteConfirmTask) ? '已录制的视频文件' : '已下载文件'}、临时文件和相关缓存内容
-            {deleteConfirmTask && Number(deleteConfirmTask.downloadedBytes || 0) > 0
-              ? `（约 ${formatFileSize(Number(deleteConfirmTask.downloadedBytes))}）`
-              : ''}
-            ，操作无法撤销。
+            {t('home.deleteWarning')
+              .replace('{target}', isRecordTask(deleteConfirmTask) ? t('home.recordTask') : t('home.downloadTask'))
+             .replace('{size}', deleteConfirmTask && Number(deleteConfirmTask.downloadedBytes || 0) > 0 ? formatApproxSize(Number(deleteConfirmTask.downloadedBytes)) : '')}
           </p>
 
           <div className="flex items-center justify-end gap-2 pt-1">
@@ -1093,31 +1096,27 @@ export default function Home() {
               onClick={() => setDeleteConfirmTask(null)}
               className="rounded-lg border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3.5 py-2 text-sm font-medium text-slate-300 dark:text-neutral-600 transition hover:bg-slate-100 dark:hover:bg-neutral-800 hover:bg-slate-50 dark:hover:bg-neutral-800/60"
             >
-              取消
+              {t('common.cancel')}
             </button>
             <button
               onClick={() => deleteConfirmTask && handleTaskDelete(deleteConfirmTask)}
               className="rounded-lg border border-red-200 dark:border-red-500/20 bg-red-600 px-3.5 py-2 text-sm font-medium text-white transition"
             >
-              确认删除
+              {t('home.confirmDelete')}
             </button>
           </div>
         </div>
       </Modal>
 
-      <Modal open={Boolean(retryConfirmTask)} onClose={() => setRetryConfirmTask(null)} title="重试录制任务" width="max-w-md">
+      <Modal open={Boolean(retryConfirmTask)} onClose={() => setRetryConfirmTask(null)} title={t('home.retryRecordTask')} width="max-w-md">
         <div className="space-y-4">
           <div className="rounded-xl border border-slate-200 dark:border-neutral-800 bg-slate-50 dark:bg-neutral-800/60 px-3 py-2.5">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-neutral-400">任务名称</div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-neutral-400">{t('home.taskName')}</div>
             <div className="mt-1 truncate text-sm font-semibold text-slate-700 dark:text-neutral-200">{retryConfirmTask?.saveName || retryConfirmTask?.url || ''}</div>
           </div>
 
           <p className="text-sm leading-6 text-slate-300 dark:text-neutral-600">
-            重试将删除本次已录制的内容
-            {retryConfirmTask && Number(retryConfirmTask.downloadedBytes || 0) > 0
-              ? `（约 ${formatFileSize(Number(retryConfirmTask.downloadedBytes))}）`
-              : ''}
-            ，然后重新开始录制。若想保留现有录像，请勿继续。
+            {t('home.retryWarning').replace('{size}', retryConfirmTask && Number(retryConfirmTask.downloadedBytes || 0) > 0 ? formatApproxSize(Number(retryConfirmTask.downloadedBytes)) : '')}
           </p>
 
           <div className="flex items-center justify-end gap-2 pt-1">
@@ -1125,7 +1124,7 @@ export default function Home() {
               onClick={() => setRetryConfirmTask(null)}
               className="rounded-lg border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3.5 py-2 text-sm font-medium text-slate-300 dark:text-neutral-600 transition hover:bg-slate-100 dark:hover:bg-neutral-800 hover:bg-slate-50 dark:hover:bg-neutral-800/60"
             >
-              取消
+              {t('common.cancel')}
             </button>
             <button
               onClick={() => {
@@ -1135,7 +1134,7 @@ export default function Home() {
               }}
               className="rounded-lg border border-emerald-200 dark:border-emerald-500/20 bg-emerald-600 px-3.5 py-2 text-sm font-medium text-white transition"
             >
-              删除并重新录制
+              {t('home.deleteAndRerun')}
             </button>
           </div>
         </div>
@@ -1143,8 +1142,8 @@ export default function Home() {
 
       <div className="flex items-start justify-between gap-4">
         <div>
-          <div className="text-[11px] font-bold tracking-[0.18em] text-slate-500 dark:text-neutral-400 uppercase">Overview</div>
-          <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900 dark:text-neutral-50">任务总览</h1>
+          <div className="text-[11px] font-bold tracking-[0.18em] text-slate-500 dark:text-neutral-400 uppercase">{t('home.pageKicker')}</div>
+          <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900 dark:text-neutral-50">{t('home.overview')}</h1>
         </div>
         <div className="flex items-center gap-2" />
       </div>
@@ -1156,13 +1155,13 @@ export default function Home() {
               className={`flex-1 rounded-lg px-4 py-2 text-sm font-medium transition ${activeTab === 'download' ? 'bg-white dark:bg-neutral-900 text-blue-700 dark:text-blue-300 shadow-sm' : 'text-slate-500 dark:text-neutral-400'}`}
               onClick={() => setActiveTab('download')}
             >
-              下载任务
+              {t('home.downloadTask')}
             </button>
             <button
               className={`flex-1 rounded-lg px-4 py-2 text-sm font-medium transition ${activeTab === 'record' ? 'bg-white dark:bg-neutral-900 text-red-600 dark:text-red-400 shadow-sm' : 'text-slate-500 dark:text-neutral-400'}`}
               onClick={() => setActiveTab('record')}
             >
-              录制任务
+              {t('home.recordTask')}
             </button>
           </div>
         </div>
@@ -1173,7 +1172,7 @@ export default function Home() {
             <div className="card p-5">
               <div className="flex items-center gap-2 mb-3">
                 <span className="text-2xl leading-none">📥</span>
-                <span className="text-sm font-semibold text-slate-800 dark:text-neutral-100">下载入口</span>
+                <span className="text-sm font-semibold text-slate-800 dark:text-neutral-100">{t('home.downloadEntry')}</span>
               </div>
 
               <div className="flex gap-2">
@@ -1181,12 +1180,12 @@ export default function Home() {
                   type="text"
                   value={downloadUrl}
                   onChange={(e) => handleDownloadUrlChange(e.target.value)}
-                  placeholder="粘贴 m3u8 / mpd / ism 链接..."
+                  placeholder={t('home.pasteUrlPlaceholder')}
                   className="input-field flex-1"
                   onKeyDown={(e) => e.key === 'Enter' && !isDownloading && handleDownloadStart()}
                 />
                 <button onClick={handlePasteFromClipboard} className="btn-secondary flex items-center gap-1.5 whitespace-nowrap text-sm">
-                  <Clipboard size={14} /> 粘贴
+                  <Clipboard size={14} /> {t('common.paste')}
                 </button>
               </div>
 
@@ -1194,17 +1193,17 @@ export default function Home() {
                 type="text"
                 value={downloadName}
                 onChange={(e) => setDownloadName(e.target.value)}
-                placeholder="保存文件名（可选）"
+                placeholder={t('home.saveFileNameOptional')}
                 className="input-field mt-3"
               />
 
               <div className="mt-4 flex items-center justify-between gap-2">
                 <button onClick={() => setShowDownloadAdvanced(!showDownloadAdvanced)} className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-neutral-400 hover:text-slate-700 dark:hover:text-slate-200 text-slate-700 dark:text-neutral-200 transition-colors">
-                  <Settings2 size={13} /> 高级选项 {showDownloadAdvanced ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                  <Settings2 size={13} /> {t('home.advancedOptions')} {showDownloadAdvanced ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                 </button>
                 <div className="flex gap-2">
                   <button onClick={handleDownloadStart} disabled={isDownloading} className="btn-primary flex items-center gap-2 text-sm">
-                    <Play size={16} /> {isDownloading ? '启动中...' : '开始下载'}
+                    <Play size={16} /> {isDownloading ? t('home.processing') : t('home.startDownload')}
                   </button>
                 </div>
               </div>
@@ -1212,29 +1211,29 @@ export default function Home() {
               {showDownloadAdvanced && (
                 <div className="mt-4 grid grid-cols-2 gap-2.5">
                   <div className="p-2">
-                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400">线程数</label>
+                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400">{t('home.threadCount')}</label>
                     <input type="number" value={downloadThreadCount} onChange={(e) => setDownloadThreadCount(Number(e.target.value) || 8)} className="input-field text-sm" min={1} max={64} />
                   </div>
                   <div className="p-2">
-                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400">限速</label>
-                    <input type="text" value={downloadMaxSpeed} onChange={(e) => setDownloadMaxSpeed(e.target.value)} placeholder="如 10M" className="input-field text-sm" />
+                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400">{t('home.speedLimit')}</label>
+                    <input type="text" value={downloadMaxSpeed} onChange={(e) => setDownloadMaxSpeed(e.target.value)} placeholder="10M" className="input-field text-sm" />
                   </div>
                   <div className="p-2">
-                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400">输出格式</label>
+                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400">{t('home.outputFormat')}</label>
                     <select value={downloadMuxFormat} onChange={(e) => setDownloadMuxFormat(e.target.value)} className="input-field text-sm">
                       <option value="mp4">mp4</option>
                       <option value="mkv">mkv</option>
                     </select>
                   </div>
                   <div className="p-2">
-                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400">自定义参数</label>
+                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400">{t('home.customArgs')}</label>
                     <input type="text" value={downloadCustomArgs} onChange={(e) => setDownloadCustomArgs(e.target.value)} placeholder="--header ..." className="input-field text-sm" />
                   </div>
                   <label className="flex cursor-pointer items-center gap-2 rounded-lg bg-slate-50 dark:bg-neutral-800/60 p-2 text-xs text-slate-300 dark:text-neutral-600">
-                    <input type="checkbox" checked={downloadAutoSelect} onChange={(e) => setDownloadAutoSelect(e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 dark:border-white/5 text-blue-500 dark:text-blue-400" /> 自动选择最佳流
+                    <input type="checkbox" checked={downloadAutoSelect} onChange={(e) => setDownloadAutoSelect(e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 dark:border-white/5 text-blue-500 dark:text-blue-400" /> {t('settings.feature.autoSelect')}
                   </label>
                   <label className="flex cursor-pointer items-center gap-2 rounded-lg bg-slate-50 dark:bg-neutral-800/60 p-2 text-xs text-slate-300 dark:text-neutral-600">
-                    <input type="checkbox" checked={downloadSubOnly} onChange={(e) => setDownloadSubOnly(e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 dark:border-white/5 text-blue-500 dark:text-blue-400" /> 仅下载字幕
+                    <input type="checkbox" checked={downloadSubOnly} onChange={(e) => setDownloadSubOnly(e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 dark:border-white/5 text-blue-500 dark:text-blue-400" /> {t('home.onlyDownloadSubtitles')}
                   </label>
                 </div>
               )}
@@ -1243,31 +1242,31 @@ export default function Home() {
             <div className="card p-5">
               <div className="flex items-center gap-2 mb-3">
                 <span className="text-2xl leading-none">🗂️</span>
-                <span className="text-sm font-semibold text-slate-800 dark:text-neutral-100">批量下载</span>
+                <span className="text-sm font-semibold text-slate-800 dark:text-neutral-100">{t('home.batchDownload')}</span>
               </div>
 
               <textarea
                 value={batchText}
                 onChange={(e) => setBatchText(e.target.value)}
-                placeholder={'每行粘贴一个 URL\nhttps://example.com/video1.m3u8\nhttps://example.com/video2.m3u8\n\n也可导入 .txt / .csv / .xlsx 表格，固定按 A 列名称、B 列链接解析'}
+                placeholder={t('home.batchPlaceholder')}
                 className="input-field h-28 resize-none font-mono text-sm"
               />
 
               <div className="mt-4 flex flex-wrap gap-2">
-                <button onClick={parseBatchUrls} className="btn-primary flex items-center gap-1.5 text-sm"><Play size={15} /> 解析链接</button>
+                <button onClick={parseBatchUrls} className="btn-primary flex items-center gap-1.5 text-sm"><Play size={15} /> {t('home.parseLinks')}</button>
                 <button
                   onClick={() => batchFileInputRef.current?.click()}
                   className="btn-secondary flex items-center gap-1.5 text-sm"
                 >
-                  <Upload size={15} /> 导入表格
+                  <Upload size={15} /> {t('home.importTable')}
                 </button>
-                <button onClick={() => { setBatchText(''); setBatchItems([]) }} className="btn-secondary flex items-center gap-1.5 text-sm"><Trash2 size={15} /> 清空</button>
+                <button onClick={() => { setBatchText(''); setBatchItems([]) }} className="btn-secondary flex items-center gap-1.5 text-sm"><Trash2 size={15} /> {t('home.clear')}</button>
                 <button onClick={startBatch} disabled={isBatchRunning || batchItems.length === 0} className="btn-secondary flex items-center gap-1.5 text-sm">
-                  {isBatchRunning ? '处理中...' : '开始全部'}
+                  {isBatchRunning ? t('home.processing') : t('home.startAll')}
                 </button>
                 {isBatchRunning && (
                   <button onClick={stopBatch} className="btn-secondary flex items-center gap-1.5 text-sm">
-                    停止批量
+                    {t('home.stopBatch')}
                   </button>
                 )}
               </div>
@@ -1284,7 +1283,7 @@ export default function Home() {
                 <div className="mt-4 space-y-2">
                   {batchItems.map((item) => {
                     const BatchIcon = STATUS_ICON_META[item.status]
-                    const batchStatusText = item.status === 'running' ? '下载中' : TASK_STATUS_META[item.status].label
+                    const batchStatusText = item.status === 'running' ? t('home.downloadInProgress') : statusMeta[item.status].label
                     return (
                       <div key={item.id} className="flex items-center justify-between rounded-xl border border-slate-200 dark:border-neutral-800 bg-slate-50/60 dark:bg-neutral-800/45 px-3 py-2 text-sm">
                         <div className="min-w-0 flex-1 pr-3">
@@ -1306,28 +1305,28 @@ export default function Home() {
            <div className="card p-5">
               <div className="flex items-center gap-2 mb-3">
                 <span className="text-2xl leading-none">📹</span>
-                <span className="text-sm font-semibold text-slate-800 dark:text-neutral-100">直播录制入口</span>
+                <span className="text-sm font-semibold text-slate-800 dark:text-neutral-100">{t('home.recordEntry')}</span>
               </div>
-
+ 
               <div className="space-y-2.5">
-                <input type="text" value={recordUrl} onChange={(e) => setRecordUrl(e.target.value)} placeholder="粘贴直播 m3u8 / mpd 链接..." className="input-field" />
-                <input type="text" value={recordName} onChange={(e) => setRecordName(e.target.value)} placeholder="保存文件名（可选）" className="input-field" />
+                <input type="text" value={recordUrl} onChange={(e) => setRecordUrl(e.target.value)} placeholder={t('home.pasteLiveUrlPlaceholder')} className="input-field" />
+                <input type="text" value={recordName} onChange={(e) => setRecordName(e.target.value)} placeholder={t('home.saveFileNameOptional')} className="input-field" />
               </div>
-
+ 
               <div className="mt-4 flex gap-2">
-                <button onClick={handlePasteFromClipboard} className="btn-secondary flex items-center gap-1.5 text-sm"><Clipboard size={14} /> 粘贴</button>
+                <button onClick={handlePasteFromClipboard} className="btn-secondary flex items-center gap-1.5 text-sm"><Clipboard size={14} /> {t('common.paste')}</button>
                 <button onClick={() => setShowRecordAdvanced(!showRecordAdvanced)} className="btn-secondary flex items-center gap-1.5 text-sm">
-                  <Settings2 size={14} /> 选项 {showRecordAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  <Settings2 size={14} /> {t('home.options')} {showRecordAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </button>
               </div>
-
+ 
               {showRecordAdvanced && (
                 <div className="mt-4 grid grid-cols-2 gap-2.5">
                   {[
-                    { v: liveRealTimeMerge, s: setLiveRealTimeMerge, l: '实时合并' },
-                    { v: livePipeMux, s: setLivePipeMux, l: '管道混流' },
-                    { v: livePerformAsVod, s: setLivePerformAsVod, l: '以点播方式下载' },
-                    { v: liveFixVttByAudio, s: setLiveFixVttByAudio, l: '通过音频修正 VTT' },
+                    { v: liveRealTimeMerge, s: setLiveRealTimeMerge, l: t('home.liveRealTimeMerge') },
+                    { v: livePipeMux, s: setLivePipeMux, l: t('home.livePipeMux') },
+                    { v: livePerformAsVod, s: setLivePerformAsVod, l: t('home.livePerformAsVod') },
+                    { v: liveFixVttByAudio, s: setLiveFixVttByAudio, l: t('home.liveFixVttByAudio') },
                   ].map(({ v, s, l }) => (
                     <label key={l} className="flex cursor-pointer items-center gap-2 rounded-lg bg-slate-50 dark:bg-neutral-800/60 p-2 text-xs text-slate-300 dark:text-neutral-600">
                       <input type="checkbox" checked={v} onChange={(e) => s(e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 dark:border-white/5 text-red-500 dark:text-red-400" />
@@ -1335,32 +1334,32 @@ export default function Home() {
                     </label>
                   ))}
                   <div className="p-2">
-                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400" title="两段式按 分:秒 解释（01:30 = 1分30秒）；三段式为 时:分:秒。将规范化后传给下载器">录制时长限制</label>
-                    <input type="text" value={liveRecordLimit} onChange={(e) => setLiveRecordLimit(e.target.value)} placeholder="如 00:30（30秒）或 01:00:00" className="input-field text-sm" />
+                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400" title={t('home.recordLimitHint')}>{t('home.recordLimit')}</label>
+                    <input type="text" value={liveRecordLimit} onChange={(e) => setLiveRecordLimit(e.target.value)} placeholder={t('home.recordLimitPlaceholder')} className="input-field text-sm" />
                   </div>
                   <div className="p-2">
-                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400">刷新间隔 (秒)</label>
-                    <input type="number" value={liveWaitTime} onChange={(e) => setLiveWaitTime(e.target.value)} placeholder="自动" className="input-field text-sm" />
+                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400">{t('home.refreshIntervalSeconds')}</label>
+                    <input type="number" value={liveWaitTime} onChange={(e) => setLiveWaitTime(e.target.value)} placeholder={t('common.auto')} className="input-field text-sm" />
                   </div>
                   <div className="p-2">
-                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400" title="--live-take-count：实时合并时每个输出文件包含的分片数量">单文件分片数</label>
+                    <label className="mb-1 block text-[11px] text-slate-500 dark:text-neutral-400" title={t('home.liveTakeCountHint')}>{t('home.liveTakeCount')}</label>
                     <input type="number" value={liveTakeCount} onChange={(e) => setLiveTakeCount(e.target.value)} min={1} max={100} className="input-field text-sm" />
                   </div>
                 </div>
               )}
-
+ 
               <div className="mt-4 flex gap-2">
-                <button onClick={handleRecordStart} disabled={recordStarting} className="btn-primary flex items-center gap-2 text-sm"><Play size={16} /> {recordStarting ? '启动中...' : '开始录制'}</button>
+                <button onClick={handleRecordStart} disabled={recordStarting} className="btn-primary flex items-center gap-2 text-sm"><Play size={16} /> {recordStarting ? t('home.starting') : t('home.startRecording')}</button>
               </div>
-              <p className="mt-2 text-[11px] text-slate-500 dark:text-neutral-400">录制固定使用 MKV 封装：即使程序异常中断，已录内容仍可正常播放。可同时发起多个录制任务。</p>
+              <p className="mt-2 text-[11px] text-slate-500 dark:text-neutral-400">{t('home.fixedMkvNotice')}</p>
             </div>
         </div>
       )}
 
       <div className="flex flex-1 flex-col gap-3">
         <div className="flex items-center justify-between">
-          <div className="text-[11px] font-bold tracking-[0.18em] text-slate-500 dark:text-neutral-400 uppercase">任务列表</div>
-          <span className="text-xs text-slate-500 dark:text-neutral-400">{visibleTasks.length} 个任务</span>
+          <div className="text-[11px] font-bold tracking-[0.18em] text-slate-500 dark:text-neutral-400 uppercase">{t('home.taskList')}</div>
+          <span className="text-xs text-slate-500 dark:text-neutral-400">{visibleTasks.length} {t('common.tasks')}</span>
         </div>
         <div className="card flex flex-1 flex-col p-3">
           <div className="flex flex-1 flex-col gap-2">
@@ -1369,8 +1368,8 @@ export default function Home() {
                 {activeTab === 'record'
                   ? <span className="text-3xl leading-none">📹</span>
                   : <span className="text-3xl leading-none">📄</span>}
-                <p className="text-sm text-slate-500 dark:text-neutral-400">暂无{activeTab === 'download' ? '下载' : '录制'}任务</p>
-                <p className="text-xs text-slate-500 dark:text-neutral-400">直接在上方创建{activeTab === 'download' ? '下载' : '录制'}任务</p>
+                <p className="text-sm text-slate-500 dark:text-neutral-400">{t('home.noTasks').replace('{type}', activeTab === 'download' ? t('home.downloadTask') : t('home.recordTask'))}</p>
+                <p className="text-xs text-slate-500 dark:text-neutral-400">{t('home.noTasksHint').replace('{type}', activeTab === 'download' ? t('home.downloadTask') : t('home.recordTask'))}</p>
               </div>
             )}
           </div>

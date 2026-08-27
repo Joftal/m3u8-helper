@@ -4,6 +4,7 @@ import { FolderOpen, RotateCcw } from 'lucide-react'
 import { useSettingsStore } from '@/store/settingsStore'
 import Modal from '@/components/Modal'
 import { showToast } from '@/components/Toast'
+import { useTranslation } from '@/i18n'
 import { validateSettingValue } from '@/utils/validators'
 
 interface DraftFieldProps {
@@ -59,7 +60,7 @@ function serializeHeaders(headers: Record<string, string> | undefined): string {
 }
 
 /** 草稿式请求头编辑器：编辑过程完全自由，失焦时校验入库；解析失败红字提示且保留内容 */
-function HeadersEditor({ value, onCommit }: { value: Record<string, string>; onCommit: (next: Record<string, string>) => void }) {
+function HeadersEditor({ value, onCommit, t }: { value: Record<string, string>; onCommit: (next: Record<string, string>) => void; t: (path: string, fallback?: string) => string }) {
   const [draft, setDraft] = useState(() => serializeHeaders(value))
   const [error, setError] = useState('')
   const draftRef = useRef(draft)
@@ -103,13 +104,13 @@ function HeadersEditor({ value, onCommit }: { value: Record<string, string>; onC
           try {
             const parsed = JSON.parse(draft)
             if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-              setError('必须是 JSON 对象（键值对），尚未保存')
+              setError(t('settings.jsonObjectRequired'))
               return
             }
             setError('')
             onCommit(parsed)
           } catch {
-            setError('JSON 格式错误，尚未保存')
+            setError(t('settings.invalidJson'))
           }
         }}
         placeholder='{"Cookie": "xxx", "User-Agent": "xxx"}'
@@ -137,6 +138,7 @@ function Section({ emoji, title, children, delay = 0 }: any) {
 
 export default function SettingsPage() {
   const { settings, loaded, loadSettings, updateSetting, resetSettings } = useSettingsStore()
+  const { t } = useTranslation()
   const [adKeywordInput, setAdKeywordInput] = useState('')
   const [showResetConfirm, setShowResetConfirm] = useState(false)
 
@@ -151,13 +153,13 @@ export default function SettingsPage() {
   const handleSelectDir = async (field: string) => {
     const isFile = ['ffmpegPath', 'mp4decryptPath', 'exePath', 'logFilePath', 'keyTextFile'].includes(field)
     const path = isFile ? await window.api.dialog.openFile() : await window.api.dialog.openDir()
-    if (path) { await updateSetting(field as any, path); showToast('success', '路径已更新') }
+    if (path) { await updateSetting(field as any, path); showToast('success', t('settings.updateSuccess')) }
   }
 
   const commitField = (field: keyof typeof settings, value: string) => {
     const result = validateSettingValue(field as string, value)
     if (!result.valid) {
-      showToast('error', result.message || '参数值非法')
+      showToast('error', result.message || t('settings.invalidValue'))
       return
     }
     updateSetting(field as any, result.value as any)
@@ -182,25 +184,25 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <motion.div initial={false} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18 }} className="page-header">
         <div>
-          <div className="page-kicker">Settings</div>
-          <h1 className="page-title">应用设置</h1>
+          <div className="page-kicker">{t('settings.pageKicker')}</div>
+          <h1 className="page-title">{t('settings.pageTitle')}</h1>
         </div>
         <button
           onClick={() => setShowResetConfirm(true)}
           className="btn-secondary px-3.5 text-sm"
         >
-          恢复默认
+          {t('settings.restoreDefault')}
         </button>
       </motion.div>
 
-      <Modal open={showResetConfirm} onClose={() => setShowResetConfirm(false)} title="恢复默认配置" width="max-w-md">
+      <Modal open={showResetConfirm} onClose={() => setShowResetConfirm(false)} title={t('settings.resetTitle')} width="max-w-md">
         <div className="space-y-4">
           <div className="flex items-start gap-3 rounded-xl border border-amber-200 dark:border-amber-500/20 bg-amber-50 dark:bg-amber-500/10 px-3 py-3 text-sm text-amber-800 dark:text-amber-300">
             <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-50 dark:bg-amber-500/10 text-amber-500 dark:text-amber-400">
               <RotateCcw size={16} />
             </div>
             <div className="leading-6">
-              将恢复除“工具路径”和“网络设置”外的默认配置。已保存的工具路径与代理配置不会被清除。
+              {t('settings.resetMessage')}
             </div>
           </div>
 
@@ -209,93 +211,93 @@ export default function SettingsPage() {
               onClick={() => setShowResetConfirm(false)}
               className="rounded-lg border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3.5 py-2 text-sm font-medium text-slate-300 dark:text-neutral-600 transition hover:bg-slate-100 dark:hover:bg-neutral-800 hover:bg-slate-50 dark:hover:bg-neutral-800/60"
             >
-              取消
+              {t('common.cancel')}
             </button>
             <button
               onClick={async () => {
                 setShowResetConfirm(false)
                 await resetSettings()
-                showToast('success', '已恢复默认配置（不含工具路径和网络设置）')
+                showToast('success', t('settings.resetSuccess'))
               }}
               className="rounded-lg border border-amber-200 dark:border-amber-500/20 bg-amber-600 px-3.5 py-2 text-sm font-medium text-white transition"
             >
-              确认恢复
+              {t('settings.confirmReset')}
             </button>
           </div>
         </div>
       </Modal>
 
       <div className="settings-grid">
-        <Section emoji="🔧" title="工具路径" delay={0.02}>
+        <Section emoji="🔧" title={t('settings.toolPaths')} delay={0.02}>
           <div className="space-y-3">
-            <PathField label="N_m3u8DL-RE.exe 路径" field="exePath" placeholder="输入可执行文件路径" />
-            <PathField label="ffmpeg 路径" field="ffmpegPath" placeholder="输入 ffmpeg 可执行文件路径" />
-            <PathField label="mp4decrypt 路径" field="mp4decryptPath" placeholder="输入 mp4decrypt 可执行文件路径" />
+            <PathField label={t('settings.exePath')} field="exePath" placeholder={t('settings.inputExecutablePath')} />
+            <PathField label={t('settings.ffmpegPath')} field="ffmpegPath" placeholder={t('settings.inputFfmpegPath')} />
+            <PathField label={t('settings.mp4decryptPath')} field="mp4decryptPath" placeholder={t('settings.inputMp4decryptPath')} />
           </div>
         </Section>
 
-        <Section emoji="📁" title="文件管理" delay={0.04}>
+        <Section emoji="📁" title={t('settings.fileManagement')} delay={0.04}>
           <div className="space-y-3">
-            <PathField label="默认保存目录" field="saveDir" placeholder="当前目录..." />
-            <PathField label="临时文件目录" field="tmpDir" placeholder="当前目录..." />
+            <PathField label={t('settings.defaultSaveDir')} field="saveDir" placeholder={t('settings.currentDirectory')} />
+            <PathField label={t('settings.tempDir')} field="tmpDir" placeholder={t('settings.currentDirectory')} />
             <div className="field-shell">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">保存文件名模板</label>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.savePattern')}</label>
               <DraftField value={settings.savePattern} onCommit={(v) => commitField('savePattern', v)} placeholder='<SaveName>_<Resolution>_<Bandwidth>' className="input-field text-sm" />
-              <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">变量: SaveName, Id, Codecs, Language, Resolution, Bandwidth, MediaType, Channels, FrameRate</p>
+              <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">{t('settings.savePatternHint')}</p>
             </div>
-            <PathField label="日志文件路径" field="logFilePath" placeholder="不保存日志文件..." />
+            <PathField label={t('settings.logFilePath')} field="logFilePath" placeholder={t('settings.noLogFile')} />
           </div>
         </Section>
       </div>
 
       <div className="settings-grid">
-        <Section emoji="🌐" title="网络设置" delay={0.06}>
+        <Section emoji="🌐" title={t('settings.network')} delay={0.06}>
           <div className="space-y-3">
             <div className="field-shell">
               <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">BaseURL</label>
-              <DraftField value={settings.baseUrl} onCommit={(v) => commitField('baseUrl', v)} placeholder="不设置（自动从链接推断）" className="input-field text-sm" />
-              <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">对应 --base-url，为分片设置基础 URL</p>
+              <DraftField value={settings.baseUrl} onCommit={(v) => commitField('baseUrl', v)} placeholder={t('settings.baseUrlPlaceholder')} className="input-field text-sm" />
+              <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">{t('settings.baseUrlHint')}</p>
             </div>
             <div className="field-shell">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">代理地址</label>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.proxyAddress')}</label>
               <DraftField value={settings.proxy} onCommit={(v) => commitField('proxy', v)} placeholder="http://127.0.0.1:7890" className="input-field text-sm" />
             </div>
             <div className="field-shell">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">自定义请求头（JSON）</label>
-              <HeadersEditor value={settings.headers} onCommit={(next) => updateSetting('headers', next)} />
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.customHeaders')}</label>
+              <HeadersEditor value={settings.headers} onCommit={(next) => updateSetting('headers', next)} t={t} />
             </div>
           </div>
         </Section>
 
-        <Section emoji="⚡" title="下载控制" delay={0.08}>
+        <Section emoji="⚡" title={t('settings.download')} delay={0.08}>
           <div className="grid grid-cols-2 gap-3">
             <div className="field-shell">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">下载线程数</label>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.threads')}</label>
               <input type="number" value={settings.threadCount} onChange={(e) => updateSetting('threadCount', Number(e.target.value))} min={1} max={64} className="input-field text-sm" />
             </div>
             <div className="field-shell">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">批量任务并发数</label>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.batchConcurrency')}</label>
               <input type="number" value={settings.batchConcurrency} onChange={(e) => updateSetting('batchConcurrency', Number(e.target.value))} min={1} max={6} className="input-field text-sm" />
             </div>
             <div className="field-shell">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">下载重试次数</label>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.downloadRetryCount')}</label>
               <input type="number" value={settings.downloadRetryCount} onChange={(e) => updateSetting('downloadRetryCount', Number(e.target.value))} min={0} max={20} className="input-field text-sm" />
             </div>
             <div className="field-shell">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">HTTP 请求超时（秒）</label>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.httpRequestTimeout')}</label>
               <input type="number" value={settings.httpRequestTimeout} onChange={(e) => updateSetting('httpRequestTimeout', Number(e.target.value))} min={10} max={600} className="input-field text-sm" />
             </div>
             <div className="field-shell">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">限速（如 10M, 100K）</label>
-              <DraftField value={settings.maxSpeed} onCommit={(v) => commitField('maxSpeed', v)} placeholder="不限速" className="input-field text-sm" />
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.maxSpeed')}</label>
+              <DraftField value={settings.maxSpeed} onCommit={(v) => commitField('maxSpeed', v)} placeholder={t('settings.maxSpeedPlaceholder')} className="input-field text-sm" />
             </div>
             <div className="field-shell col-span-2">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">自定义下载范围</label>
-              <DraftField value={settings.customRange} onCommit={(v) => commitField('customRange', v)} placeholder="如 0-100 或 01:00:00-02:00:00" className="input-field text-sm" />
-              <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">对应 --custom-range</p>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.customRange')}</label>
+              <DraftField value={settings.customRange} onCommit={(v) => commitField('customRange', v)} placeholder={t('settings.customRangePlaceholder')} className="input-field text-sm" />
+              <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">{t('settings.customRangeHint')}</p>
             </div>
             <div className="field-shell col-span-2">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">字幕格式</label>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.subFormat')}</label>
               <select value={settings.subFormat} onChange={(e) => updateSetting('subFormat', e.target.value)} className="input-field text-sm">
                 <option value="SRT">SRT</option><option value="VTT">VTT</option>
               </select>
@@ -305,69 +307,69 @@ export default function SettingsPage() {
       </div>
 
       <div className="settings-grid">
-        <Section emoji="🎬" title="混流设置" delay={0.1}>
+        <Section emoji="🎬" title={t('settings.muxSettings')} delay={0.1}>
           <div className="grid grid-cols-2 gap-3">
             <div className="field-shell">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">混流格式</label>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.muxFormat')}</label>
               <select value={settings.muxFormat} onChange={(e) => updateSetting('muxFormat', e.target.value)} className="input-field text-sm">
                 <option value="mp4">MP4</option><option value="mkv">MKV</option>
               </select>
             </div>
             <div className="field-shell">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">混流器</label>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.muxMuxer')}</label>
               <select value={settings.muxMuxer} onChange={(e) => updateSetting('muxMuxer', e.target.value)} className="input-field text-sm">
                 <option value="ffmpeg">ffmpeg</option><option value="mkvmerge">mkvmerge</option>
               </select>
             </div>
             <div className="field-shell">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">日志级别</label>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.logLevel')}</label>
               <select value={settings.logLevel} onChange={(e) => updateSetting('logLevel', e.target.value)} className="input-field text-sm">
                 <option value="INFO">INFO</option><option value="DEBUG">DEBUG</option><option value="WARN">WARN</option><option value="ERROR">ERROR</option><option value="OFF">OFF</option>
               </select>
             </div>
             <div className="field-shell">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">解密引擎</label>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.decryptionEngine')}</label>
               <select value={settings.decryptionEngine} onChange={(e) => updateSetting('decryptionEngine', e.target.value)} className="input-field text-sm">
                 <option value="MP4DECRYPT">mp4decrypt</option><option value="SHAKA_PACKAGER">shaka-packager</option><option value="FFMPEG">ffmpeg</option>
               </select>
             </div>
             <div className="field-shell col-span-2">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">密钥文件路径</label>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.keyTextFile')}</label>
               <div className="flex gap-2">
-                <DraftField value={settings.keyTextFile} onCommit={(v) => commitField('keyTextFile', v)} placeholder="无" className="input-field flex-1 text-sm" />
+                <DraftField value={settings.keyTextFile} onCommit={(v) => commitField('keyTextFile', v)} placeholder={t('settings.none')} className="input-field flex-1 text-sm" />
                 <button onClick={() => handleSelectDir('keyTextFile')} className="btn-secondary px-3"><FolderOpen size={14} /></button>
               </div>
             </div>
             <label className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-slate-200 dark:border-neutral-800 bg-slate-50/80 dark:bg-neutral-800/70 bg-slate-100 dark:bg-neutral-800 p-2.5 transition-colors hover:bg-slate-100 dark:hover:bg-neutral-800">
               <input type="checkbox" checked={settings.muxAfterDone} onChange={(e) => updateSetting('muxAfterDone', e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 dark:border-white/5 text-blue-500 dark:text-blue-400 focus:ring-blue-200 dark:focus:ring-blue-500/30" />
               <div>
-                <span className="text-xs font-medium text-slate-700 dark:text-neutral-200">完成后执行混流</span>
-                <p className="text-[10px] text-slate-500 dark:text-neutral-400">对应 --mux-after-done</p>
+                <span className="text-xs font-medium text-slate-700 dark:text-neutral-200">{t('settings.muxAfterDone')}</span>
+                <p className="text-[10px] text-slate-500 dark:text-neutral-400">{t('settings.muxAfterDoneHint')}</p>
               </div>
             </label>
             <label className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-slate-200 dark:border-neutral-800 bg-slate-50/80 dark:bg-neutral-800/70 bg-slate-100 dark:bg-neutral-800 p-2.5 transition-colors hover:bg-slate-100 dark:hover:bg-neutral-800">
               <input type="checkbox" checked={settings.muxKeepFiles} onChange={(e) => updateSetting('muxKeepFiles', e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 dark:border-white/5 text-blue-500 dark:text-blue-400 focus:ring-blue-200 dark:focus:ring-blue-500/30" />
               <div>
-                <span className="text-xs font-medium text-slate-700 dark:text-neutral-200">保留中间混流文件</span>
-                <p className="text-[10px] text-slate-500 dark:text-neutral-400">对应 keep=true</p>
+                <span className="text-xs font-medium text-slate-700 dark:text-neutral-200">{t('settings.muxKeepFiles')}</span>
+                <p className="text-[10px] text-slate-500 dark:text-neutral-400">{t('settings.keepTrue')}</p>
               </div>
             </label>
             <label className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-slate-200 dark:border-neutral-800 bg-slate-50/80 dark:bg-neutral-800/70 bg-slate-100 dark:bg-neutral-800 p-2.5 transition-colors hover:bg-slate-100 dark:hover:bg-neutral-800">
-              <input type="checkbox" checked={settings.muxSkipSub} onChange={(e) => updateSetting('muxSkipSub', e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 dark:border-white/5 text-blue-500 dark:text-blue-400 focus:ring-blue-200 dark:focus:ring-blue-500/30" />
+              <input type="checkbox" checked={settings.muxSkipSub} onChange={(e) => updateSetting('muxSkipSub', e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 dark:border-white/5 text-blue-500 dark:text-blue-400 focus:ring-blue-500/30" />
               <div>
-                <span className="text-xs font-medium text-slate-700 dark:text-neutral-200">混流时跳过字幕</span>
-                <p className="text-[10px] text-slate-500 dark:text-neutral-400">对应 skip_sub=true</p>
+                <span className="text-xs font-medium text-slate-700 dark:text-neutral-200">{t('settings.muxSkipSub')}</span>
+                <p className="text-[10px] text-slate-500 dark:text-neutral-400">{t('settings.skipSubTrue')}</p>
               </div>
             </label>
           </div>
         </Section>
 
-        <Section emoji="🔑" title="解密高级" delay={0.12}>
+        <Section emoji="🔑" title={t('settings.decryptionAdvanced')} delay={0.12}>
           <div className="space-y-3">
             <div className="field-shell">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">自定义 HLS 加密方式</label>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.customHlsMethod')}</label>
               <select value={settings.customHlsMethod} onChange={(e) => updateSetting('customHlsMethod', e.target.value)} className="input-field text-sm">
-                <option value="">不指定</option>
+                <option value="">{t('settings.notSpecified')}</option>
                 <option value="AES_128">AES_128</option>
                 <option value="AES_128_ECB">AES_128_ECB</option>
                 <option value="CENC">CENC</option>
@@ -376,26 +378,26 @@ export default function SettingsPage() {
                 <option value="SAMPLE_AES">SAMPLE_AES</option>
                 <option value="SAMPLE_AES_CTR">SAMPLE_AES_CTR</option>
               </select>
-              <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">对应 --custom-hls-method</p>
+              <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">{t('settings.customHlsMethodHint')}</p>
             </div>
             <div className="field-shell">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">自定义 HLS 解密 KEY</label>
-              <DraftField value={settings.customHlsKey} onCommit={(v) => commitField('customHlsKey', v)} placeholder="文件路径、HEX 或 Base64" className="input-field text-sm" />
-              <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">对应 --custom-hls-key</p>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.customHlsKey')}</label>
+              <DraftField value={settings.customHlsKey} onCommit={(v) => commitField('customHlsKey', v)} placeholder={t('settings.hlsKeyPlaceholder')} className="input-field text-sm" />
+              <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">{t('settings.customHlsKeyHint')}</p>
             </div>
             <div className="field-shell">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">自定义 HLS 解密 IV</label>
-              <DraftField value={settings.customHlsIv} onCommit={(v) => commitField('customHlsIv', v)} placeholder="文件路径、HEX 或 Base64" className="input-field text-sm" />
-              <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">对应 --custom-hls-iv</p>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.customHlsIv')}</label>
+              <DraftField value={settings.customHlsIv} onCommit={(v) => commitField('customHlsIv', v)} placeholder={t('settings.hlsKeyPlaceholder')} className="input-field text-sm" />
+              <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">{t('settings.customHlsIvHint')}</p>
             </div>
           </div>
         </Section>
       </div>
 
       <div className="settings-grid">
-        <Section emoji="🧹" title="广告过滤" delay={0.14}>
+        <Section emoji="🧹" title={t('settings.adFilter')} delay={0.14}>
           <div className="field-shell">
-            <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">广告分片 URL 关键字（每行一个正则）</label>
+            <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.adKeywordsLabel')}</label>
             <textarea
               value={adKeywordInput}
               onChange={(e) => setAdKeywordInput(e.target.value)}
@@ -406,28 +408,28 @@ export default function SettingsPage() {
               placeholder={'ad\npromo\ncommercial'}
               className="input-field h-20 resize-none font-mono text-xs"
             />
-            <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">对应 --ad-keyword，匹配的分片将被跳过</p>
+            <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">{t('settings.adKeywordsHint')}</p>
           </div>
         </Section>
 
-        <Section emoji="🔘" title="功能开关" delay={0.16}>
+        <Section emoji="🔘" title={t('settings.featureFlags')} delay={0.16}>
           <div className="grid grid-cols-2 gap-2">
             {[
-              { key: 'autoSelect', label: '自动选择最佳流', desc: '--auto-select' },
-              { key: 'delAfterDone', label: '完成后删除临时文件', desc: '默认开启' },
-              { key: 'autoSubtitleFix', label: '自动修正字幕', desc: '默认开启' },
-              { key: 'binaryMerge', label: '二进制合并', desc: '--binary-merge' },
-              { key: 'writeMetaJson', label: '写入 meta.json', desc: '默认开启' },
-              { key: 'checkSegmentsCount', label: '检查分片数量', desc: '默认开启' },
-              { key: 'concurrentDownload', label: '并发下载音视频字幕', desc: '-mt' },
-              { key: 'useSystemProxy', label: '使用系统代理', desc: '默认开启' },
-              { key: 'appendUrlParams', label: '附加 URL 参数到分片', desc: '--append-url-params' },
-              { key: 'noDateInfo', label: '混流不写入日期', desc: '--no-date-info' },
-              { key: 'mp4RealTimeDecryption', label: 'MP4 实时解密', desc: '--mp4-real-time-decryption' },
-              { key: 'useFFmpegConcatDemuxer', label: 'ffmpeg concat 分离器', desc: '--use-ffmpeg-concat-demuxer' },
-              { key: 'noLog', label: '关闭日志文件', desc: '--no-log' },
-              { key: 'skipMerge', label: '跳过合并分片', desc: '--skip-merge' },
-              { key: 'allowHlsMultiExtMap', label: '允许多 EXT-X-MAP', desc: '实验性' },
+              { key: 'autoSelect', label: t('settings.feature.autoSelect'), desc: '--auto-select' },
+              { key: 'delAfterDone', label: t('settings.feature.delAfterDone'), desc: t('settings.feature.defaultOn') },
+              { key: 'autoSubtitleFix', label: t('settings.feature.autoSubtitleFix'), desc: t('settings.feature.defaultOn') },
+              { key: 'binaryMerge', label: t('settings.feature.binaryMerge'), desc: '--binary-merge' },
+              { key: 'writeMetaJson', label: t('settings.feature.writeMetaJson'), desc: t('settings.feature.defaultOn') },
+              { key: 'checkSegmentsCount', label: t('settings.feature.checkSegmentsCount'), desc: t('settings.feature.defaultOn') },
+              { key: 'concurrentDownload', label: t('settings.feature.concurrentDownload'), desc: '-mt' },
+              { key: 'useSystemProxy', label: t('settings.feature.useSystemProxy'), desc: t('settings.feature.defaultOn') },
+              { key: 'appendUrlParams', label: t('settings.feature.appendUrlParams'), desc: '--append-url-params' },
+              { key: 'noDateInfo', label: t('settings.feature.noDateInfo'), desc: '--no-date-info' },
+              { key: 'mp4RealTimeDecryption', label: t('settings.feature.mp4RealTimeDecryption'), desc: '--mp4-real-time-decryption' },
+              { key: 'useFFmpegConcatDemuxer', label: t('settings.feature.useFFmpegConcatDemuxer'), desc: '--use-ffmpeg-concat-demuxer' },
+              { key: 'noLog', label: t('settings.feature.noLog'), desc: '--no-log' },
+              { key: 'skipMerge', label: t('settings.feature.skipMerge'), desc: '--skip-merge' },
+              { key: 'allowHlsMultiExtMap', label: t('settings.feature.allowHlsMultiExtMap'), desc: t('settings.feature.experimental') },
             ].map(({ key, label, desc }) => (
               <label key={key} className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-slate-200 dark:border-neutral-800 bg-slate-50/80 dark:bg-neutral-800/70 bg-slate-100 dark:bg-neutral-800 p-2.5 transition-colors hover:bg-slate-100 dark:hover:bg-neutral-800">
                 <input type="checkbox" checked={(settings as any)[key]} onChange={(e) => updateSetting(key as any, e.target.checked)}
@@ -442,13 +444,13 @@ export default function SettingsPage() {
         </Section>
       </div>
 
-      <Section emoji="📝" title="自定义参数" delay={0.18}>
+      <Section emoji="📝" title={t('settings.customArgsTitle')} delay={0.18}>
         <div className="field-shell">
           <DraftField value={settings.customArgs} onCommit={(v) => commitField('customArgs', v)}
-            placeholder="额外的命令行参数，会追加到末尾..." className="input-field text-sm" />
-          <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">高级用户可直接输入 N_m3u8DL-RE 支持的任意参数，如 --mux-import、-sv 等</p>
+            placeholder={t('settings.customArgsPlaceholder')} className="input-field text-sm" />
+          <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">{t('settings.customArgsHint')}</p>
           <p className="mt-1 text-[11px] text-amber-500 dark:text-amber-400">
-            风险提示：此处内容会原样追加到下载命令行，仅输入来源可信的参数；不排除个别参数会影响文件保存位置或清理行为。
+            {t('settings.customArgsWarning')}
           </p>
         </div>
       </Section>

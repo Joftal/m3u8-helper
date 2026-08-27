@@ -1,15 +1,29 @@
 import { Ban, CheckCircle, Clock, Loader2, XCircle, type LucideIcon } from 'lucide-react'
+import { DEFAULT_LOCALE, normalizeLocale } from '../constants/locales'
+import { messages, type Locale } from '../i18n'
 
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 
-/** 任务状态元数据的唯一来源：标签文案 + 徽标配色（Home/History 共用） */
-export const TASK_STATUS_META: Record<TaskStatus, { label: string; tone: string }> = {
-  pending: { label: '等待', tone: 'bg-slate-100 text-slate-600' },
-  running: { label: '进行中', tone: 'bg-blue-50 text-blue-700' },
-  completed: { label: '已完成', tone: 'bg-emerald-50 text-emerald-700' },
-  failed: { label: '失败', tone: 'bg-red-50 text-red-700' },
-  cancelled: { label: '已取消', tone: 'bg-amber-50 text-amber-700' }
+export const TASK_STATUS_META_BASE: Record<TaskStatus, { label: string; tone: string }> = {
+  pending: { label: messages.zh.status.pending, tone: 'bg-slate-100 text-slate-600' },
+  running: { label: messages.zh.status.running, tone: 'bg-blue-50 text-blue-700' },
+  completed: { label: messages.zh.status.completed, tone: 'bg-emerald-50 text-emerald-700' },
+  failed: { label: messages.zh.status.failed, tone: 'bg-red-50 text-red-700' },
+  cancelled: { label: messages.zh.status.cancelled, tone: 'bg-amber-50 text-amber-700' }
 } as const
+
+export const getTaskStatusMeta = (locale: Locale = DEFAULT_LOCALE) => {
+  const safeLocale = normalizeLocale(locale, DEFAULT_LOCALE)
+  return {
+    pending: { label: messages[safeLocale].status.pending, tone: TASK_STATUS_META_BASE.pending.tone },
+    running: { label: messages[safeLocale].status.running, tone: TASK_STATUS_META_BASE.running.tone },
+    completed: { label: messages[safeLocale].status.completed, tone: TASK_STATUS_META_BASE.completed.tone },
+    failed: { label: messages[safeLocale].status.failed, tone: TASK_STATUS_META_BASE.failed.tone },
+    cancelled: { label: messages[safeLocale].status.cancelled, tone: TASK_STATUS_META_BASE.cancelled.tone }
+  }
+}
+
+export const TASK_STATUS_META = TASK_STATUS_META_BASE
 
 /** 状态图标徽标元数据：任务列表与任务记录共用同一套图标语言 */
 export const STATUS_ICON_META: Record<TaskStatus, { Icon: LucideIcon; className: string; spin?: boolean }> = {
@@ -20,11 +34,23 @@ export const STATUS_ICON_META: Record<TaskStatus, { Icon: LucideIcon; className:
   cancelled: { Icon: Ban, className: 'text-amber-500 dark:text-amber-400' }
 }
 
-export const HISTORY_STATUS_FILTERS = [
-  { key: 'all', label: '全部' },
-  { key: 'completed', label: '已完成' },
-  { key: 'failed', label: '失败' },
-  { key: 'cancelled', label: '已取消' }
+export const HISTORY_STATUS_FILTERS_BASE = [
+  { key: 'all', label: messages.zh.history.filterAll },
+  { key: 'completed', label: messages.zh.history.filterCompleted },
+  { key: 'failed', label: messages.zh.history.filterFailed },
+  { key: 'cancelled', label: messages.zh.history.filterCancelled }
 ] as const
+
+export const getHistoryStatusFilters = (locale: Locale = DEFAULT_LOCALE) => {
+  const safeLocale = normalizeLocale(locale, DEFAULT_LOCALE)
+  return [
+    { key: 'all', label: messages[safeLocale].history.filterAll },
+    { key: 'completed', label: messages[safeLocale].history.filterCompleted },
+    { key: 'failed', label: messages[safeLocale].history.filterFailed },
+    { key: 'cancelled', label: messages[safeLocale].history.filterCancelled }
+  ] as const
+}
+
+export const HISTORY_STATUS_FILTERS = HISTORY_STATUS_FILTERS_BASE
 
 export type HistoryStatusFilter = (typeof HISTORY_STATUS_FILTERS)[number]['key']
