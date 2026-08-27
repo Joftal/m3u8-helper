@@ -68,6 +68,9 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Build app
+        run: npm run build
+
       - name: Build Windows packages
         if: matrix.os == 'windows-latest'
         run: npm run package:win
