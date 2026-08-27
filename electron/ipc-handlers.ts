@@ -4,6 +4,8 @@ import { startDownload, cancelDownload, deleteTaskArtifacts, sanitizeTaskInfo } 
 import { addScheduledTask, removeScheduledTask, getScheduledTasks } from './scheduler'
 import { validateSettingValue } from '../src/utils/validators'
 import type { HistoryRecord, DownloadOptions } from '../src/types/download'
+import { DEFAULT_LOCALE, normalizeLocale, type SupportedLocale } from '../src/constants/locales'
+import { translateMessagePath, translateRuntimeMessage } from '../src/i18n'
 
 /** 渲染进程提交的历史记录白名单净化：字段类型收敛 + 字符串截断 */
 function sanitizeHistoryRecord(raw: unknown): HistoryRecord | null {
@@ -41,6 +43,18 @@ function sanitizeHistoryRecord(raw: unknown): HistoryRecord | null {
 }
 
 export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
+  const currentLocale = (): SupportedLocale => {
+    try {
+      const language = getStore().get('settings.language')
+      return normalizeLocale(language, DEFAULT_LOCALE)
+    } catch {
+      return DEFAULT_LOCALE
+    }
+  }
+  const rt = (key: Parameters<typeof translateRuntimeMessage>[1], params?: Record<string, string>) =>
+    translateRuntimeMessage(currentLocale(), key, params)
+  const t = (path: string, fallback?: string) => translateMessagePath(currentLocale(), path, fallback)
+
   // ========== 下载 ==========
   ipcMain.handle('download:start', async (_, options) => {
     try {
@@ -73,16 +87,19 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
 
     // 白名单校验：仅允许已知配置项，且不支持嵌套 key
     if (normalizedKey.includes('.')) {
-      return { success: false, error: '不支持嵌套配置项' }
+      return { success: false, error: rt('unsupportedNestedSetting') }
     }
     const knownKeys = getDefaultSettings() as Record<string, unknown>
     if (!Object.prototype.hasOwnProperty.call(knownKeys, normalizedKey)) {
-      return { success: false, error: '未知配置项' }
+      return { success: false, error: rt('unknownSettingKey') }
     }
 
     const validation = validateSettingValue(normalizedKey, value)
     if (!validation.valid) {
-      return { success: false, error: validation.message || '参数值非法' }
+      const message = validation.message
+        ? translateMessagePath(currentLocale(), validation.message, rt('invalidParameterValue'))
+        : rt('invalidParameterValue')
+      return { success: false, error: message }
     }
     const store = getStore()
     store.set(`settings.${normalizedKey}` as any, validation.value)
@@ -112,7 +129,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
   ipcMain.handle('history:add', async (_, record) => {
     const sanitized = sanitizeHistoryRecord(record)
     if (!sanitized) {
-      return { success: false, error: '历史记录字段非法' }
+      return { success: false, error: rt('invalidHistoryRecord') }
     }
     const store = getStore()
     const history = store.get('history') || []
@@ -180,7 +197,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
       properties: ['openFile'],
       filters: Array.isArray(filters) && filters.length > 0
         ? filters
-        : [{ name: 'All Files', extensions: ['*'] }]
+        : [{ name: t('common.allFiles', 'All Files'), extensions: ['*'] }]
     })
     if (result.canceled) return null
     return result.filePaths[0]
@@ -196,7 +213,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
     const p = String(target ?? '').trim()
     // 仅允许绝对路径（历史记录中的保存目录），相对路径一律拒绝
     if (!/^[a-zA-Z]:[\\/]/.test(p) && !p.startsWith('/')) {
-      return '不支持的路径'
+      return rt('unsupportedPath')
     }
     return shell.openPath(p)
   })

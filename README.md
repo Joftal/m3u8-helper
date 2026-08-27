@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/Electron-35-2b2d30?logo=electron&logoColor=white" alt="Electron" />
   <img src="https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white" alt="React" />
   <img src="https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white" alt="TypeScript" />
-  <img src="https://img.shields.io/badge/Windows-11%2B-0078d4?logo=microsoft&logoColor=white" alt="Windows" />
+  <img src="https://img.shields.io/badge/Windows%20%7C%20macOS-Supported-0078d4?logo=apple&logoColor=white" alt="Windows and macOS" />
 </p>
 
 <p>
@@ -24,7 +24,7 @@ turning command-line power into a cleaner, calmer, more usable download experien
 
 ## ✨ What is this?
 
-`m3u8-helper` is a Windows desktop app for downloading streaming media.
+`m3u8-helper` is a desktop app for downloading streaming media on Windows and macOS.
 
 In simple terms:
 
@@ -81,14 +81,25 @@ npm run build
 ### Package
 
 ```bash
-npm run package
+npm run package:win   # Windows
+npm run package:mac   # macOS
 ```
+
+### CI build and release (GitHub Actions)
+
+- Auto release: push a tag like `v1.0.0`
+- Manual release: run workflow **Build and Release** and provide:
+  - `tag` (required)
+  - `draft` (`true` = draft release)
+  - `prerelease` (`true` = prerelease)
+- Release notes are generated automatically from commits/PRs
+- Workflow file: `.github/workflows/build-and-release.yml`
 
 ## 🧪 Requirements
 
 - Node.js >= 18
-- Windows
-- `N_m3u8DL-RE.exe`
+- Windows 11+ or macOS 12+
+- `N_m3u8DL-RE` executable (`N_m3u8DL-RE.exe` on Windows, `N_m3u8DL-RE` on macOS)
 - for decryption / remuxing: `ffmpeg` / `mp4decrypt`
 
 ## 📁 Project structure

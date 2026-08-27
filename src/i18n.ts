@@ -1,5 +1,5 @@
 import { DEFAULT_LOCALE, normalizeLocale, type SupportedLocale } from './constants/locales'
-import { useSettingsStore } from '@/store/settingsStore'
+import { useSettingsStore } from './store/settingsStore'
 
 export type Locale = SupportedLocale
 
@@ -36,6 +36,7 @@ export const messages = {
       imported: '已导入',
       tasks: '个任务',
       docs: '文档',
+      allFiles: '所有文件',
       unknownError: '未知错误',
       noInfo: '暂无信息',
       copied: '已复制到剪贴板',
@@ -46,6 +47,23 @@ export const messages = {
         dark: '切换为深色模式'
       },
       dialog: '对话框'
+    },
+    validation: {
+      stringRequired: '字段必须为字符串',
+      invalidPathFormat: '路径格式不合法',
+      unsupportedLanguage: '语言设置不受支持',
+      invalidUrl: '必须为合法的 URL',
+      headersObjectRequired: '请求头必须为对象',
+      speedStringRequired: '限速值必须为字符串',
+      invalidSpeedFormat: '限速格式应为 10M、500K 或 1.5G',
+      hlsMethodStringRequired: '加密方法必须为字符串',
+      invalidHlsMethod: '非法的 HLS 加密方法',
+      mustBeString: '必须为字符串',
+      parameterMustBeString: '参数必须为字符串',
+      invalidCustomRangeFormat: '自定义范围格式应为 0-100 或 01:00:00-02:00:00',
+      adKeywordsStringArray: '广告关键词必须为字符串数组',
+      unknownSettingKey: '未知配置项',
+      invalidValue: '非法值'
     },
     home: {
       pageKicker: '任务总览',
@@ -149,6 +167,7 @@ export const messages = {
         delete: '删除',
         success: '成功',
         failed: '失败',
+        messageTemplate: '{action}{result}：{detail}',
         alreadyFinished: '任务可能已结束，已下载文件未被清理',
         cleanupFailed: '清理失败：相关下载文件未能删除',
         notStopped: '任务未能正常终止，已下载文件未被清理',
@@ -250,7 +269,7 @@ export const messages = {
       inputExecutablePath: '输入可执行文件路径',
       inputFfmpegPath: '输入 ffmpeg 可执行文件路径',
       inputMp4decryptPath: '输入 mp4decrypt 可执行文件路径',
-      exePath: 'N_m3u8DL-RE.exe 路径',
+      exePath: 'N_m3u8DL-RE 可执行文件路径',
       ffmpegPath: 'ffmpeg 路径',
       mp4decryptPath: 'mp4decrypt 路径',
       downloadRetryCount: '下载重试次数',
@@ -384,6 +403,7 @@ export const messages = {
       imported: 'Imported',
       tasks: 'tasks',
       docs: 'Docs',
+      allFiles: 'All Files',
       unknownError: 'Unknown error',
       noInfo: 'No information',
       copied: 'Copied to clipboard',
@@ -394,6 +414,23 @@ export const messages = {
         dark: 'Switch to dark mode'
       },
       dialog: 'Dialog'
+    },
+    validation: {
+      stringRequired: 'Value must be a string',
+      invalidPathFormat: 'Invalid path format',
+      unsupportedLanguage: 'Unsupported language setting',
+      invalidUrl: 'Must be a valid URL',
+      headersObjectRequired: 'Headers must be an object',
+      speedStringRequired: 'Speed limit must be a string',
+      invalidSpeedFormat: 'Speed format should be 10M, 500K, or 1.5G',
+      hlsMethodStringRequired: 'Encryption method must be a string',
+      invalidHlsMethod: 'Invalid HLS encryption method',
+      mustBeString: 'Must be a string',
+      parameterMustBeString: 'Parameter must be a string',
+      invalidCustomRangeFormat: 'Custom range format should be 0-100 or 01:00:00-02:00:00',
+      adKeywordsStringArray: 'Ad keywords must be a string array',
+      unknownSettingKey: 'Unknown setting key',
+      invalidValue: 'Invalid value'
     },
     home: {
       pageKicker: 'Overview',
@@ -497,6 +534,7 @@ export const messages = {
         delete: 'Delete',
         success: 'Success',
         failed: 'Failed',
+        messageTemplate: '{action} {result}: {detail}',
         alreadyFinished: 'The task may already be complete; downloaded files were not cleaned up',
         cleanupFailed: 'Cleanup failed: relevant download files could not be deleted',
         notStopped: 'The task could not be stopped cleanly; downloaded files were not cleaned up',
@@ -598,7 +636,7 @@ export const messages = {
       inputExecutablePath: 'Enter executable file path',
       inputFfmpegPath: 'Enter ffmpeg executable path',
       inputMp4decryptPath: 'Enter mp4decrypt executable path',
-      exePath: 'N_m3u8DL-RE.exe path',
+      exePath: 'N_m3u8DL-RE executable path',
       ffmpegPath: 'ffmpeg path',
       mp4decryptPath: 'mp4decrypt path',
       downloadRetryCount: 'Download retries',
@@ -712,21 +750,142 @@ function resolveMessageValue(root: unknown, keys: string[]): unknown {
   return current
 }
 
+export function translateMessagePath(localeInput: unknown, path: string, fallback?: string): string {
+  const locale: Locale = normalizeLocale(localeInput, DEFAULT_LOCALE)
+  const keys = path.split('.')
+
+  for (const candidate of [locale, DEFAULT_LOCALE]) {
+    const value = resolveMessageValue(messages[candidate], keys)
+    if (typeof value === 'string') return value
+  }
+  if (typeof fallback === 'string') return fallback
+  return path
+}
+
 export function useTranslation() {
   const { settings } = useSettingsStore()
   const locale: Locale = normalizeLocale(settings?.language, DEFAULT_LOCALE)
 
   const t = (path: string, fallback?: string) => {
-    const keys = path.split('.')
-
-    for (const candidate of [locale, DEFAULT_LOCALE]) {
-      const value = resolveMessageValue(messages[candidate], keys)
-      if (typeof value === 'string') return value
-    }
-
-    if (typeof fallback === 'string') return fallback
-    return path
+    return translateMessagePath(locale, path, fallback)
   }
 
   return { t, locale }
+}
+
+export const runtimeMessages = {
+  zh: {
+    executableNotRunnable: '可执行文件不可运行（请确认执行权限）: {path} ({reason})',
+    recordNotificationTitle: 'm3u8-helper · 录制任务',
+    recordAborted: '「{name}」录制异常终止，已录内容已保留',
+    recordCompleted: '「{name}」录制完成',
+    taskCancelled: '任务已取消',
+    processExitAbnormal: '进程异常退出（代码 {code}）',
+    interruptedByRestart: '应用重启导致下载中断，可重试继续',
+    downloadUrlRequired: '下载地址不能为空',
+    downloadUrlMustBeHttp: '下载地址必须是 http(s) 链接',
+    downloaderNotConfigured: '未配置 N_m3u8DL-RE 可执行文件路径，且未找到内置二进制，请在设置中配置',
+    downloaderPathNotFound: 'N_m3u8DL-RE 可执行文件路径不存在: {path}',
+    pathValidationFailed: '路径校验未通过',
+    pathNotAbsolute: '不是有效的绝对路径',
+    pathRootDenied: '不允许删除盘根目录',
+    pathShallowDepthDenied: '路径深度不足，拒绝整目录删除',
+    pathCriticalDirDenied: '位于系统关键目录内',
+    pathProtectedDirDenied: '目标是受保护目录或其上级目录',
+    deleteFailedWithReason: '删除失败: {reason}',
+    deleteFailed: '删除失败',
+    unknown: '未知',
+    recordingInProgressTitle: '录制进行中',
+    activeRecordTasksMessage: '还有 {count} 个录制任务正在进行',
+    closeInterruptDetail: '关闭应用会立即中断录制。已录内容（MKV 封装）通常仍可播放，但未写入的部分会丢失。',
+    quitInterruptDetail: '退出会立即中断录制。已录内容（MKV 封装）通常仍可播放，但未写入的部分会丢失。',
+    minimizeToBackground: '最小化到后台继续录制',
+    stopRecordAndExit: '停止录制并退出',
+    cancel: '取消',
+    unsupportedNestedSetting: '不支持嵌套配置项',
+    unknownSettingKey: '未知配置项',
+    invalidParameterValue: '参数值非法',
+    invalidHistoryRecord: '历史记录字段非法',
+    unsupportedPath: '不支持的路径',
+    schedulerInputMustBeObject: '定时任务参数必须是对象',
+    schedulerUrlMustBeHttp: '定时任务 URL 必须是 http(s) 链接',
+    schedulerTaskSkipped: '[m3u8-helper] 定时任务 {id} 未调度：cron 表达式无效或任务已禁用',
+    storageFallbackToUserData: '[m3u8-helper] 安装目录不可写，配置已降级存储到用户数据目录: {path}'
+  },
+  en: {
+    executableNotRunnable: 'Executable is not runnable (check execute permission): {path} ({reason})',
+    recordNotificationTitle: 'm3u8-helper · Recording Task',
+    recordAborted: 'Recording "{name}" terminated unexpectedly. Captured content was kept.',
+    recordCompleted: 'Recording "{name}" completed.',
+    taskCancelled: 'Task cancelled',
+    processExitAbnormal: 'Process exited abnormally (code {code})',
+    interruptedByRestart: 'Download interrupted by app restart. You can retry.',
+    downloadUrlRequired: 'Download URL is required',
+    downloadUrlMustBeHttp: 'Download URL must be an http(s) link',
+    downloaderNotConfigured: 'N_m3u8DL-RE executable path is not configured and no bundled binary was found. Please configure it in settings.',
+    downloaderPathNotFound: 'N_m3u8DL-RE executable path does not exist: {path}',
+    pathValidationFailed: 'Path validation failed',
+    pathNotAbsolute: 'Not a valid absolute path',
+    pathRootDenied: 'Deleting filesystem root is not allowed',
+    pathShallowDepthDenied: 'Path depth is too shallow; refusing full directory deletion',
+    pathCriticalDirDenied: 'Target is inside a critical system directory',
+    pathProtectedDirDenied: 'Target is a protected directory or its parent directory',
+    deleteFailedWithReason: 'Delete failed: {reason}',
+    deleteFailed: 'Delete failed',
+    unknown: 'unknown',
+    recordingInProgressTitle: 'Recording in progress',
+    activeRecordTasksMessage: '{count} recording task(s) are still running',
+    closeInterruptDetail: 'Closing the app interrupts recording immediately. Recorded content (MKV) is usually still playable, but unwritten parts will be lost.',
+    quitInterruptDetail: 'Quitting interrupts recording immediately. Recorded content (MKV) is usually still playable, but unwritten parts will be lost.',
+    minimizeToBackground: 'Minimize to background and continue recording',
+    stopRecordAndExit: 'Stop recording and exit',
+    cancel: 'Cancel',
+    unsupportedNestedSetting: 'Nested setting keys are not supported',
+    unknownSettingKey: 'Unknown setting key',
+    invalidParameterValue: 'Invalid parameter value',
+    invalidHistoryRecord: 'Invalid history record fields',
+    unsupportedPath: 'Unsupported path',
+    schedulerInputMustBeObject: 'Scheduled task payload must be an object',
+    schedulerUrlMustBeHttp: 'Scheduled task URL must be an http(s) link',
+    schedulerTaskSkipped: '[m3u8-helper] Scheduled task {id} not registered: cron expression is invalid or task is disabled',
+    storageFallbackToUserData: '[m3u8-helper] Installation directory is not writable. Falling back to user data directory: {path}'
+  }
+} as const
+
+export type RuntimeMessageKey = keyof typeof runtimeMessages.zh
+
+export function translateRuntimeMessage(
+  localeInput: unknown,
+  key: RuntimeMessageKey,
+  params: Record<string, string> = {}
+): string {
+  const locale = normalizeLocale(localeInput, DEFAULT_LOCALE)
+  const fallback = runtimeMessages[DEFAULT_LOCALE][key]
+  const template = runtimeMessages[locale][key] ?? fallback
+  return template.replace(/\{(\w+)\}/g, (_, name: string) => params[name] ?? '')
+}
+
+export function translatePathSafetyReason(localeInput: unknown, reason?: string): string {
+  const locale = normalizeLocale(localeInput, DEFAULT_LOCALE)
+  if (!reason) return translateRuntimeMessage(locale, 'pathValidationFailed')
+
+  const map: Record<string, RuntimeMessageKey> = {
+    'path.notAbsolute': 'pathNotAbsolute',
+    'path.rootDenied': 'pathRootDenied',
+    'path.shallowDepthDenied': 'pathShallowDepthDenied',
+    'path.criticalDirDenied': 'pathCriticalDirDenied',
+    'path.protectedDirDenied': 'pathProtectedDirDenied'
+  }
+  const key = map[reason]
+  if (!key) return reason
+  return translateRuntimeMessage(locale, key)
+}
+
+const IMPORT_HEADER_ALIAS_SET = new Set([
+  '名称', '名字', '文件名', '链接', '地址',
+  'name', 'title', 'url', 'http', 'https'
+])
+
+export function isImportHeaderAlias(value: string): boolean {
+  return IMPORT_HEADER_ALIAS_SET.has(String(value || '').toLowerCase())
 }

@@ -1,5 +1,5 @@
 import { ChildProcess, spawn } from 'child_process'
-import { existsSync, mkdirSync, readdirSync, rmSync, promises as fsPromises } from 'fs'
+import { accessSync, chmodSync, constants as fsConstants, existsSync, mkdirSync, readdirSync, rmSync, promises as fsPromises } from 'fs'
 import { BrowserWindow, nativeImage, Notification } from 'electron'
 import { basename, dirname, join } from 'path'
 import { getStore } from './store'
@@ -8,6 +8,8 @@ import { randomUUID } from 'crypto'
 import { isRecordTaskOptions } from '../src/utils/recording'
 import type { DownloadOptions } from '../src/types/download'
 import type { AppSettings } from '../src/types/settings'
+import { DEFAULT_LOCALE, normalizeLocale, type SupportedLocale } from '../src/constants/locales'
+import { translatePathSafetyReason, translateRuntimeMessage, type RuntimeMessageKey } from '../src/i18n'
 
 export interface DownloadTask {
   id: string
@@ -28,6 +30,23 @@ export interface DownloadTask {
 }
 
 const activeTasks = new Map<string, DownloadTask>()
+
+function currentLocale(): SupportedLocale {
+  try {
+    const settings = getStore().get('settings') as Partial<AppSettings> | undefined
+    return normalizeLocale(settings?.language, DEFAULT_LOCALE)
+  } catch {
+    return DEFAULT_LOCALE
+  }
+}
+
+function rt(key: RuntimeMessageKey, params: Record<string, string> = {}): string {
+  return translateRuntimeMessage(currentLocale(), key, params)
+}
+
+function localizePathSafetyReason(reason?: string): string {
+  return translatePathSafetyReason(currentLocale(), reason)
+}
 
 /** 最近一次启动下载时使用的窗口引用，用于取消等无法传入窗口的路径发送事件 */
 let activeMainWindow: BrowserWindow | null = null
@@ -253,20 +272,103 @@ function deriveTaskLogPath(baseLogPath: string, taskId: string): string {
   return `${dir}${sep}${base}_${shortId}${ext}`
 }
 
+function binaryNameCandidates(baseName: string): string[] {
+  if (process.platform === 'win32') return [`${baseName}.exe`, baseName]
+  return [baseName, `${baseName}.exe`]
+}
+
+function resolveBundledBinary(baseName: string): string {
+  const executableRoot = dirname(process.execPath)
+  const resourcesRoot = process.resourcesPath || ''
+  const names = binaryNameCandidates(baseName)
+  const candidates: string[] = []
+  for (const name of names) {
+    if (resourcesRoot) {
+      candidates.push(join(resourcesRoot, 'bin', name))
+      candidates.push(join(dirname(resourcesRoot), 'MacOS', 'resources', 'bin', name))
+    }
+    candidates.push(join(executableRoot, name))
+    candidates.push(join(executableRoot, 'resources', 'bin', name))
+    candidates.push(join(executableRoot, '../Resources/bin', name))
+    candidates.push(join(__dirname, `../../${name}`))
+    candidates.push(join(__dirname, `../../resources/bin/${name}`))
+  }
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate
+  }
+  return ''
+}
+
+function ensureExecutablePermission(binaryPath: string): string {
+  const target = binaryPath.trim()
+  if (!target) return target
+  if (process.platform === 'win32') return target
+
+  try {
+    accessSync(target, fsConstants.X_OK)
+    return target
+  } catch {}
+
+  try {
+    chmodSync(target, 0o755)
+    accessSync(target, fsConstants.X_OK)
+    return target
+  } catch (error) {
+    const message = (error as Error).message || 'unknown error'
+    throw new Error(rt('executableNotRunnable', { path: target, reason: message }))
+  }
+}
+
 /** 解析可用的 ffmpeg 可执行文件：设置路径 → 打包携带路径 → PATH */
 function resolveFfmpegBinary(settings: AppSettings): string {
-  const executableRoot = dirname(process.execPath)
-  const candidates = [
-    settings.ffmpegPath,
-    join(executableRoot, 'ffmpeg.exe'),
-    join(executableRoot, 'resources', 'bin', 'ffmpeg.exe'),
-    join(__dirname, '../../ffmpeg.exe'),
-    join(__dirname, '../../resources/bin/ffmpeg.exe')
-  ]
-  for (const candidate of candidates) {
-    if (candidate && candidate.trim() && existsSync(candidate.trim())) return candidate.trim()
-  }
+  const bundledOrConfigured = resolveOptionalToolBinary(settings.ffmpegPath, 'ffmpeg')
+  if (bundledOrConfigured) return bundledOrConfigured
   return 'ffmpeg'
+}
+
+/** 解析可用的 N_m3u8DL-RE 可执行文件：设置路径 → 打包携带路径 */
+function resolveDownloaderBinary(settings: AppSettings): string {
+  const configured = (settings.exePath || '').trim()
+  if (configured) {
+    if (existsSync(configured)) return ensureExecutablePermission(configured)
+    return configured
+  }
+  const bundled = resolveBundledBinary('N_m3u8DL-RE')
+  return bundled ? ensureExecutablePermission(bundled) : ''
+}
+
+function resolveOptionalToolBinary(configuredPath: string | undefined, baseName: string): string {
+  const configured = (configuredPath || '').trim()
+  if (configured) return configured
+  const bundled = resolveBundledBinary(baseName)
+  return bundled ? ensureExecutablePermission(bundled) : ''
+}
+
+function terminateProcessTree(pid: number): void {
+  if (!Number.isInteger(pid) || pid <= 0) return
+
+  if (process.platform === 'win32') {
+    try {
+      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    } catch {}
+    return
+  }
+
+  try {
+    process.kill(-pid, 'SIGTERM')
+  } catch {}
+  try {
+    process.kill(pid, 'SIGTERM')
+  } catch {}
+
+  setTimeout(() => {
+    try {
+      process.kill(-pid, 'SIGKILL')
+    } catch {}
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {}
+  }, 1500)
 }
 
 export interface RemuxOutcome {
@@ -368,9 +470,9 @@ function notifyRecordFinished(task: DownloadTask & Record<string, any>): void {
     if (activeMainWindow?.isFocused()) return
     const name = task.saveName || task.url
     const body = task.status === 'failed'
-      ? `「${name}」录制异常终止，已录内容已保留`
-      : `「${name}」录制完成`
-    new Notification({ title: 'm3u8-helper · 录制任务', body, icon: NOTIFICATION_ICON }).show()
+      ? rt('recordAborted', { name })
+      : rt('recordCompleted', { name })
+    new Notification({ title: rt('recordNotificationTitle'), body, icon: NOTIFICATION_ICON }).show()
   } catch {
     // 通知属尽力而为的增强能力，失败不影响主流程
   }
@@ -423,7 +525,7 @@ function finalizeTask(taskId: string, exitCode: number | null): void {
 
   if (task.status === 'cancelled') {
     task.progress = Math.min(100, Math.max(0, task.progress || 0))
-    task.latestLog = task.latestLog || '任务已取消'
+    task.latestLog = task.latestLog || rt('taskCancelled')
   } else if (exitCode === 0) {
     task.status = 'completed'
     task.progress = 100
@@ -435,7 +537,7 @@ function finalizeTask(taskId: string, exitCode: number | null): void {
     }
   } else {
     task.status = 'failed'
-    task.latestLog = task.latestLog || `进程异常退出（代码 ${exitCode ?? 'unknown'}）`
+    task.latestLog = task.latestLog || rt('processExitAbnormal', { code: String(exitCode ?? rt('unknown')) })
   }
 
   activeMainWindow?.webContents.send('download:complete', {
@@ -668,7 +770,7 @@ export function interruptOrphanedRuntimeTasks(): void {
     if (!task || (task.status !== 'running' && task.status !== 'pending')) continue
 
     task.status = 'failed'
-    task.latestLog = '应用重启导致下载中断，可重试继续'
+    task.latestLog = rt('interruptedByRestart')
     changed = true
 
     // 崩溃时 finalizeTask 未执行，隔离临时目录未被清理；校验命名归属后收集待删
@@ -762,19 +864,19 @@ export function startDownload(options: DownloadOptions, mainWindow: BrowserWindo
 
   const requestUrl = typeof options.url === 'string' ? options.url.trim() : ''
   if (!requestUrl) {
-    throw new Error('下载地址不能为空')
+    throw new Error(rt('downloadUrlRequired'))
   }
   // 仅接受 http(s)：与 scheduler / 历史记录净化保持同一标准，阻断 file:、ftp: 等协议流入 CLI 参数
   if (!/^https?:\/\//i.test(requestUrl)) {
-    throw new Error('下载地址必须是 http(s) 链接')
+    throw new Error(rt('downloadUrlMustBeHttp'))
   }
 
-  const exePath = settings.exePath
+  const exePath = resolveDownloaderBinary(settings)
   if (!exePath) {
-    throw new Error('未配置 N_m3u8DL-RE.exe 路径，请在设置中配置')
+    throw new Error(rt('downloaderNotConfigured'))
   }
   if (!existsSync(exePath)) {
-    throw new Error(`N_m3u8DL-RE.exe 路径不存在: ${exePath}`)
+    throw new Error(rt('downloaderPathNotFound', { path: exePath }))
   }
 
   const ensureDir = (value?: string) => {
@@ -862,7 +964,8 @@ export function startDownload(options: DownloadOptions, mainWindow: BrowserWindo
   // 启动子进程
   const child = spawn(exePath, args, {
     windowsHide: true,
-    stdio: ['pipe', 'pipe', 'pipe']
+    stdio: ['pipe', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32'
   })
 
   task.process = child
@@ -983,20 +1086,20 @@ export function cancelDownload(taskId: string): boolean {
   if (!task) return false
 
   // 幂等保护：已进入取消流程的任务直接返回成功。
-  // 对同一 pid 重复 taskkill 在 Windows 上有 PID 复用误杀无关进程树的风险。
+  // 对同一 pid 重复终止存在 PID 复用误杀风险，故取消路径只执行一次。
   if (task.status === 'cancelled') return true
 
   task.status = 'cancelled'
-  task.latestLog = task.latestLog || '任务已取消'
+  task.latestLog = task.latestLog || rt('taskCancelled')
 
   if (task.process) {
-    task.process.kill('SIGTERM')
-
-    // Windows 上强制杀死；随后 close 事件触发 finalizeTask 统一收尾
-    // （发送 cancelled 完成事件、清理产物与定时器）
     if (task.process.pid) {
+      // Windows 用 taskkill 终止进程树；类 Unix 优先杀进程组，再兜底单进程。
+      // 随后 close 事件触发 finalizeTask 统一收尾（发送事件、清理产物与定时器）。
+      terminateProcessTree(task.process.pid)
+    } else {
       try {
-        spawn('taskkill', ['/pid', String(task.process.pid), '/T', '/F'])
+        task.process.kill('SIGTERM')
       } catch {}
     }
   } else {
@@ -1022,7 +1125,7 @@ interface DeleteOutcome {
 function removeGuarded(target: unknown, deleted: string[], skipped: DeleteOutcome['skipped']): void {
   const verdict = isAllowedRecursiveDeleteTarget(target)
   if (!verdict.ok || !verdict.path) {
-    skipped.push({ path: String(target ?? ''), reason: verdict.reason || '路径校验未通过' })
+    skipped.push({ path: String(target ?? ''), reason: localizePathSafetyReason(verdict.reason) || rt('pathValidationFailed') })
     return
   }
   if (!existsSync(verdict.path)) return
@@ -1031,7 +1134,7 @@ function removeGuarded(target: unknown, deleted: string[], skipped: DeleteOutcom
     rmSync(verdict.path, { recursive: true, force: true })
     deleted.push(verdict.path)
   } catch (err) {
-    skipped.push({ path: verdict.path, reason: `删除失败: ${(err as Error).message}` })
+    skipped.push({ path: verdict.path, reason: rt('deleteFailedWithReason', { reason: (err as Error).message }) })
   }
 }
 
@@ -1039,7 +1142,7 @@ function removeGuarded(target: unknown, deleted: string[], skipped: DeleteOutcom
 function cleanupSharedTmpDir(tmpDir: string, stem: string, deleted: string[], skipped: DeleteOutcome['skipped']): void {
   const verdict = isAllowedRecursiveDeleteTarget(tmpDir)
   if (!verdict.ok || !verdict.path) {
-    skipped.push({ path: String(tmpDir ?? ''), reason: verdict.reason || '路径校验未通过' })
+    skipped.push({ path: String(tmpDir ?? ''), reason: localizePathSafetyReason(verdict.reason) || rt('pathValidationFailed') })
     return
   }
 
@@ -1063,7 +1166,7 @@ function cleanupSharedTmpDir(tmpDir: string, stem: string, deleted: string[], sk
         rmSync(full, { force: true })
         deleted.push(full)
       } catch {
-        skipped.push({ path: full, reason: '删除失败' })
+        skipped.push({ path: full, reason: rt('deleteFailed') })
       }
     }
   }
@@ -1128,7 +1231,7 @@ export function deleteTaskArtifacts(taskId: string, taskInfo: any = {}): DeleteO
           rmSync(candidate, { force: true })
           deleted.push(candidate)
         } catch {
-          skipped.push({ path: candidate, reason: '删除失败' })
+          skipped.push({ path: candidate, reason: rt('deleteFailed') })
         }
       }
 
@@ -1149,7 +1252,7 @@ export function deleteTaskArtifacts(taskId: string, taskInfo: any = {}): DeleteO
             rmSync(fullPath, { force: true })
             deleted.push(fullPath)
           } catch {
-            skipped.push({ path: fullPath, reason: '删除失败' })
+            skipped.push({ path: fullPath, reason: rt('deleteFailed') })
           }
         }
       } catch {}
@@ -1409,7 +1512,7 @@ function buildArgs(options: DownloadOptions, settings: AppSettings): string[] {
     args.push('--decryption-engine', options.decryptionEngine || settings.decryptionEngine)
   }
   // --decryption-binary-path
-  const mp4decryptPath = options.mp4decryptPath || settings.mp4decryptPath
+  const mp4decryptPath = resolveOptionalToolBinary(options.mp4decryptPath || settings.mp4decryptPath, 'mp4decrypt')
   if (mp4decryptPath) {
     args.push('--decryption-binary-path', mp4decryptPath)
   }
@@ -1433,7 +1536,7 @@ function buildArgs(options: DownloadOptions, settings: AppSettings): string[] {
 
   // ========== 工具路径 ==========
   // --ffmpeg-binary-path
-  const ffmpegPath = options.ffmpegPath || settings.ffmpegPath
+  const ffmpegPath = resolveOptionalToolBinary(options.ffmpegPath || settings.ffmpegPath, 'ffmpeg')
   if (ffmpegPath) {
     args.push('--ffmpeg-binary-path', ffmpegPath)
   }

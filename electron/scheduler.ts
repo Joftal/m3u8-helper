@@ -4,6 +4,8 @@ import cron from 'node-cron'
 import { BrowserWindow } from 'electron'
 import { startDownload } from './downloader'
 import type { DownloadOptions } from '../src/types/download'
+import { DEFAULT_LOCALE, normalizeLocale, type SupportedLocale } from '../src/constants/locales'
+import { translateRuntimeMessage } from '../src/i18n'
 
 interface ScheduledTask {
   id: string
@@ -16,15 +18,28 @@ interface ScheduledTask {
 
 const activeTimers = new Map<string, ScheduledTask>()
 
+function currentLocale(): SupportedLocale {
+  try {
+    const language = getStore().get('settings.language')
+    return normalizeLocale(language, DEFAULT_LOCALE)
+  } catch {
+    return DEFAULT_LOCALE
+  }
+}
+
+function rt(key: Parameters<typeof translateRuntimeMessage>[1], params?: Record<string, string>): string {
+  return translateRuntimeMessage(currentLocale(), key, params)
+}
+
 /** 校验并净化渲染进程传入的定时任务数据，阻断恶意字段进入下载/删除链路 */
 function assertValidScheduledInput(input: any): { url: string; cron: string; enabled: boolean; options: Record<string, any> } {
   if (!input || typeof input !== 'object') {
-    throw new Error('定时任务参数必须是对象')
+    throw new Error(rt('schedulerInputMustBeObject'))
   }
 
   const url = typeof input.url === 'string' ? input.url.trim() : ''
   if (!/^https?:\/\/.+/i.test(url)) {
-    throw new Error('定时任务 URL 必须是 http(s) 链接')
+    throw new Error(rt('schedulerUrlMustBeHttp'))
   }
 
   const cron = typeof input.cron === 'string' ? input.cron.trim() : ''
@@ -113,7 +128,7 @@ export function initScheduler(mainWindow?: BrowserWindow | null): void {
     if (timer) {
       activeTimers.set(persisted.id, { ...persisted, timer })
     } else {
-      console.warn(`[m3u8-helper] 定时任务 ${persisted.id} 未调度：cron 表达式无效或任务已禁用`)
+      console.warn(rt('schedulerTaskSkipped', { id: String(persisted.id) }))
     }
   }
 }

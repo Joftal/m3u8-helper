@@ -10,14 +10,18 @@
     "out/**/*",
     "resources/**/*"
   ],
-  // 命令行工具按需携带：仓库根目录存在对应 exe 时才会打入 resources/bin，缺失则跳过
+  // Bundle CLI tools on demand: include binaries that exist at repo root into resources/bin.
   "extraResources": [
     {
       "from": ".",
       "to": "bin",
       "filter": [
+        "N_m3u8DL-RE",
         "N_m3u8DL-RE.exe",
-        "ffmpeg.exe"
+        "ffmpeg",
+        "ffmpeg.exe",
+        "mp4decrypt",
+        "mp4decrypt.exe"
       ]
     }
   ],
@@ -35,6 +39,20 @@
     "icon": "resources/icon.ico",
     "sign": false,
     "signAndEditExecutable": false
+  },
+  "mac": {
+    "target": [
+      {
+        "target": "dmg",
+        "arch": ["x64", "arm64"]
+      },
+      {
+        "target": "zip",
+        "arch": ["x64", "arm64"]
+      }
+    ],
+    "icon": "resources/icon.icns",
+    "category": "public.app-category.utilities"
   },
   "nsis": {
     "oneClick": false,

@@ -159,7 +159,7 @@ export default function SettingsPage() {
   const commitField = (field: keyof typeof settings, value: string) => {
     const result = validateSettingValue(field as string, value)
     if (!result.valid) {
-      showToast('error', result.message || t('settings.invalidValue'))
+      showToast('error', result.message ? t(result.message, t('settings.invalidValue')) : t('settings.invalidValue'))
       return
     }
     updateSetting(field as any, result.value as any)
@@ -254,7 +254,7 @@ export default function SettingsPage() {
         <Section emoji="🌐" title={t('settings.network')} delay={0.06}>
           <div className="space-y-3">
             <div className="field-shell">
-              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">BaseURL</label>
+              <label className="mb-1 block text-xs text-slate-500 dark:text-neutral-400">{t('settings.baseUrl')}</label>
               <DraftField value={settings.baseUrl} onCommit={(v) => commitField('baseUrl', v)} placeholder={t('settings.baseUrlPlaceholder')} className="input-field text-sm" />
               <p className="mt-1 text-[11px] text-slate-500 dark:text-neutral-400">{t('settings.baseUrlHint')}</p>
             </div>

@@ -9,6 +9,10 @@ logs/
 *.log
 ffmpeg.exe
 N_m3u8DL-RE.exe
+mp4decrypt.exe
+ffmpeg
+N_m3u8DL-RE
+mp4decrypt
 .DS_Store
 Thumbs.db
 *.local

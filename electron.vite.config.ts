@@ -5,6 +5,11 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
+    resolve: {
+      alias: {
+        '@': resolve('src')
+      }
+    },
     build: {
       lib: {
         entry: resolve('electron/main/index.ts')
@@ -13,6 +18,11 @@ export default defineConfig({
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
+    resolve: {
+      alias: {
+        '@': resolve('src')
+      }
+    },
     build: {
       lib: {
         entry: resolve('electron/preload/index.ts')

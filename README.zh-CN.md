@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/Electron-35-2b2d30?logo=electron&logoColor=white" alt="Electron" />
   <img src="https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white" alt="React" />
   <img src="https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white" alt="TypeScript" />
-  <img src="https://img.shields.io/badge/Windows-11%2B-0078d4?logo=microsoft&logoColor=white" alt="Windows" />
+  <img src="https://img.shields.io/badge/Windows%20%7C%20macOS-%E6%94%AF%E6%8C%81-0078d4?logo=apple&logoColor=white" alt="Windows and macOS" />
 </p>
 
 <p>
@@ -24,7 +24,7 @@
 
 ## ✨ 这是什么
 
-`m3u8-helper` 是一个面向 Windows 的桌面端流媒体下载工具。
+`m3u8-helper` 是一个支持 Windows 和 macOS 的桌面端流媒体下载工具。
 
 简单来说：
 
@@ -81,14 +81,25 @@ npm run build
 ### 打包
 
 ```bash
-npm run package
+npm run package:win   # Windows
+npm run package:mac   # macOS
 ```
+
+### CI 构建与发布（GitHub Actions）
+
+- 自动发布：推送标签，例如 `v1.0.0`
+- 手动发布：在 Actions 中运行 **Build and Release**，并填写：
+  - `tag`（必填）
+  - `draft`（`true` 表示仅草稿发布）
+  - `prerelease`（`true` 表示预发布）
+- Release Notes（版本更新说明）会基于提交/PR 自动生成
+- 工作流文件：`.github/workflows/build-and-release.yml`
 
 ## 🧪 前置要求
 
 - Node.js >= 18
-- Windows
-- `N_m3u8DL-RE.exe`
+- Windows 11+ 或 macOS 12+
+- `N_m3u8DL-RE` 可执行文件（Windows 为 `N_m3u8DL-RE.exe`，macOS 为 `N_m3u8DL-RE`）
 - 如需解密 / 混流：`ffmpeg` / `mp4decrypt`
 
 ## 📁 项目结构

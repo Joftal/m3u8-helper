@@ -18,7 +18,7 @@ import { useHistoryStore } from '@/store/historyStore'
 import { useSettingsStore } from '@/store/settingsStore'
 import Modal from '@/components/Modal'
 import { showToast } from '@/components/Toast'
-import { useTranslation } from '@/i18n'
+import { isImportHeaderAlias, useTranslation } from '@/i18n'
 import { extractFileName, extractUrlHost, formatDuration, formatFileSize, generateId } from '@/utils/format'
 import { isValidUrl } from '@/utils/validators'
 import { getTaskStatusMeta, STATUS_ICON_META } from '@/utils/status'
@@ -76,7 +76,7 @@ export default function Home() {
   // 录制发起请求进行中：防止双击重复创建
   const [recordStarting, setRecordStarting] = useState(false)
   // 正在执行停止操作的录制任务：按钮保持禁用直至 complete 事件确认终止，
-  // 避免对同一进程重复下发 taskkill（Windows PID 复用误杀风险）
+  // 避免对同一进程重复下发终止信号（PID 复用误杀风险）
   const [cancellingIds, setCancellingIds] = useState<string[]>([])
   // 重试确认弹窗目标：录制任务重试会清理已录产物，必须显式确认
   const [retryConfirmTask, setRetryConfirmTask] = useState<DownloadTask | null>(null)
@@ -270,7 +270,10 @@ export default function Home() {
   ) => {
     const actionText = t(`home.taskAction.${action}`)
     const resultText = outcome === 'error' ? t('home.taskAction.failed') : t('home.taskAction.success')
-    return `${actionText}${resultText}：${detail}`
+    return t('home.taskAction.messageTemplate')
+      .replace('{action}', actionText)
+      .replace('{result}', resultText)
+      .replace('{detail}', detail)
   }
 
   const handleDownloadUrlChange = (value: string) => {
@@ -594,7 +597,7 @@ export default function Home() {
       const name = normalizeImportCell(parsed.name)
       const url = normalizeImportCell(parsed.url)
       if (!url || !isValidUrl(url)) continue
-      if (name.toLowerCase() === '名称' || name.toLowerCase() === '名字' || name.toLowerCase() === 'name' || name.toLowerCase() === 'url' || name.toLowerCase() === '链接' || name.toLowerCase() === '地址') {
+      if (isImportHeaderAlias(name)) {
         continue
       }
       rows.push({ name: name || extractFileName(url), url })
@@ -625,9 +628,8 @@ export default function Home() {
           if (!Array.isArray(row) || row.length < 2) return
           const firstCell = normalizeImportCell(String(row[0] ?? ''))
           const secondCell = normalizeImportCell(String(row[1] ?? ''))
-          const headerLike = ['名称', '名字', '文件名', 'name', 'title', '链接', 'url', '地址', 'http', 'https']
           if (!firstCell || !secondCell) return
-          if (headerLike.includes(firstCell) || headerLike.includes(secondCell)) return
+          if (isImportHeaderAlias(firstCell) || isImportHeaderAlias(secondCell)) return
           const urlCell = secondCell.includes('http') ? secondCell : extractUrlCandidate(secondCell)
           if (!urlCell || !isValidUrl(urlCell)) return
           parsedRows.push({ name: firstCell, url: urlCell })
@@ -725,7 +727,7 @@ export default function Home() {
 
   /**
    * 停止一个录制任务：立即置为“停止中”禁用相关按钮，
-   * 直到 download:complete 到达再解除，避免对同一进程重复下发 taskkill
+   * 直到 download:complete 到达再解除，避免对同一进程重复下发终止信号
    */
   const stopRecording = async (taskId: string) => {
     if (cancellingIds.includes(taskId)) return
@@ -887,7 +889,7 @@ export default function Home() {
         showToast('error', getTaskActionMessage(actionText, 'error', cleanupResult.message))
         return
       }
-      showToast('success', getTaskActionMessage(actionText, 'success', t('home.taskAction.opened')))
+      showToast('success', getTaskActionMessage(actionText, 'success', t('home.taskAction.cleaned')))
     } catch {
       showToast('error', getTaskActionMessage(actionText, 'error', t('home.taskAction.taskFileMayExist')))
     } finally {
@@ -1378,4 +1380,3 @@ export default function Home() {
     </div>
   )
 }
-

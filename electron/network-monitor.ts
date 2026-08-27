@@ -1,6 +1,6 @@
-/* 系统网络速度监控（netstat -e 轮询差分）
+/* 系统网络速度监控（netstat 轮询差分）
  *
- * 原理：netstat -e 输出网卡的累计收发字节数（自开机起），
+ * 原理：读取 netstat 输出的累计收发字节数（自开机起），
  * 每秒轮询一次并做差分 → 真实的系统网络吞吐（下行/上行）。
  *
  * 为什么不是"按进程"：实验证伪了 IO 计数器方案——
@@ -36,8 +36,8 @@ function BrowserWindowAll(): import('electron').BrowserWindow[] {
   return (require('electron') as typeof import('electron')).BrowserWindow.getAllWindows()
 }
 
-/** 解析 netstat -e 输出：取「两个大整数」行中累计值最大的一组（= 字节数行） */
-function parseNetstat(text: string): { rx: number; tx: number } | null {
+/** Windows: 解析 netstat -e 输出，取「两个大整数」行中累计值最大的一组（= 字节数行） */
+function parseWindowsNetstat(text: string): { rx: number; tx: number } | null {
   let best: { rx: number; tx: number } | null = null
   for (const m of text.matchAll(/(\d{6,})\s+(\d{6,})/g)) {
     const rx = Number(m[1])
@@ -46,11 +46,75 @@ function parseNetstat(text: string): { rx: number; tx: number } | null {
   return best
 }
 
+/** macOS: 解析 netstat -ib 输出，按接口名去重后聚合 Ibytes/Obytes */
+function parseDarwinNetstat(text: string): { rx: number; tx: number } | null {
+  const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0)
+  let headerIndex = -1
+  let iBytesIndex = -1
+  let oBytesIndex = -1
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const cols = lines[i].trim().split(/\s+/)
+    const iIdx = cols.findIndex((item) => item.toLowerCase() === 'ibytes')
+    const oIdx = cols.findIndex((item) => item.toLowerCase() === 'obytes')
+    if (iIdx >= 0 && oIdx >= 0) {
+      headerIndex = i
+      iBytesIndex = iIdx
+      oBytesIndex = oIdx
+      break
+    }
+  }
+
+  if (headerIndex < 0) return null
+
+  const perInterface = new Map<string, { rx: number; tx: number }>()
+  for (const line of lines.slice(headerIndex + 1)) {
+    const cols = line.trim().split(/\s+/)
+    const name = (cols[0] || '').trim()
+    const iRaw = cols[iBytesIndex]
+    const oRaw = cols[oBytesIndex]
+    if (!name || !iRaw || !oRaw) continue
+    const iValue = Number(iRaw.replace(/,/g, ''))
+    const oValue = Number(oRaw.replace(/,/g, ''))
+    if (!Number.isFinite(iValue) || !Number.isFinite(oValue)) continue
+    const prev = perInterface.get(name)
+    if (!prev) {
+      perInterface.set(name, { rx: iValue, tx: oValue })
+      continue
+    }
+    if (iValue > prev.rx || oValue > prev.tx) {
+      perInterface.set(name, { rx: Math.max(prev.rx, iValue), tx: Math.max(prev.tx, oValue) })
+    }
+  }
+
+  let rx = 0
+  let tx = 0
+  for (const value of perInterface.values()) {
+    rx += value.rx
+    tx += value.tx
+  }
+
+  if (rx <= 0 && tx <= 0) return null
+  return { rx, tx }
+}
+
+function getSamplerConfig(): { command: string; args: string[]; parser: (text: string) => { rx: number; tx: number } | null } | null {
+  if (process.platform === 'win32') {
+    return { command: 'netstat', args: ['-e'], parser: parseWindowsNetstat }
+  }
+  if (process.platform === 'darwin') {
+    return { command: 'netstat', args: ['-ib'], parser: parseDarwinNetstat }
+  }
+  return null
+}
+
 function sampleOnce(): void {
   if (stopping || inFlight) return
+  const sampler = getSamplerConfig()
+  if (!sampler) return
   inFlight = true
   try {
-    const child = spawn('netstat', ['-e'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    const child = spawn(sampler.command, sampler.args, { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
     let out = ''
     // 看门狗：netstat 意外挂起时强杀，防止 inFlight 永久卡死轮询
     const hangGuard = setTimeout(() => {
@@ -70,7 +134,7 @@ function sampleOnce(): void {
       inFlight = false
       if (stopping) return
 
-      const cur = parseNetstat(out)
+      const cur = sampler.parser(out)
       if (!cur) return
 
       const now = Date.now()
@@ -93,17 +157,19 @@ function loop(): void {
   timer = setTimeout(loop, POLL_INTERVAL)
 }
 
-/** 启动监控（仅 Windows 有效；幂等） */
+/** 启动监控（Windows/macOS 有效；幂等） */
 export function startNetworkMonitor(): void {
   if (stopping || timer) return
   stopping = false
-  if (process.platform !== 'win32') return
+  prev = null
+  if (!getSamplerConfig()) return
   loop()
 }
 
 /** 停止监控（应用退出时调用） */
 export function stopNetworkMonitor(): void {
   stopping = true
+  prev = null
   if (timer) {
     clearTimeout(timer)
     timer = null

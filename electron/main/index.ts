@@ -6,8 +6,21 @@ import { getStore, initStore } from '../store'
 import { interruptOrphanedRuntimeTasks, countActiveRecordTasks, cancelAllRecordTasks, sweepOrphanedEmptyTmpDirs, setActiveMainWindow } from '../downloader'
 import { initScheduler } from '../scheduler'
 import { startNetworkMonitor, stopNetworkMonitor } from '../network-monitor'
+import { DEFAULT_LOCALE, normalizeLocale, type SupportedLocale } from '../../src/constants/locales'
+import { translateRuntimeMessage } from '../../src/i18n'
 
 let mainWindow: BrowserWindow | null = null
+function currentLocale(): SupportedLocale {
+  try {
+    const language = getStore().get('settings.language')
+    return normalizeLocale(language, DEFAULT_LOCALE)
+  } catch {
+    return DEFAULT_LOCALE
+  }
+}
+function rt(key: Parameters<typeof translateRuntimeMessage>[1], params?: Record<string, string>): string {
+  return translateRuntimeMessage(currentLocale(), key, params)
+}
 
 /**
  * 录制在途时的退出放行标记：close 对话框与 before-quit 守卫共用。
@@ -120,10 +133,10 @@ function createWindow(): void {
       event.preventDefault()
       const choice = dialog.showMessageBoxSync(mainWindow, {
         type: 'warning',
-        title: '录制进行中',
-        message: `还有 ${countActiveRecordTasks()} 个录制任务正在进行`,
-        detail: '关闭应用会立即中断录制。已录内容（MKV 封装）通常仍可播放，但未写入的部分会丢失。',
-        buttons: ['最小化到后台继续录制', '停止录制并退出', '取消'],
+        title: rt('recordingInProgressTitle'),
+        message: rt('activeRecordTasksMessage', { count: String(countActiveRecordTasks()) }),
+        detail: rt('closeInterruptDetail'),
+        buttons: [rt('minimizeToBackground'), rt('stopRecordAndExit'), rt('cancel')],
         defaultId: 0,
         cancelId: 2,
         noLink: true
@@ -167,10 +180,10 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault()
     const choice = dialog.showMessageBoxSync({
       type: 'warning',
-      title: '录制进行中',
-      message: `还有 ${countActiveRecordTasks()} 个录制任务正在进行`,
-      detail: '退出会立即中断录制。已录内容（MKV 封装）通常仍可播放，但未写入的部分会丢失。',
-      buttons: ['停止录制并退出', '取消'],
+      title: rt('recordingInProgressTitle'),
+      message: rt('activeRecordTasksMessage', { count: String(countActiveRecordTasks()) }),
+      detail: rt('quitInterruptDetail'),
+      buttons: [rt('stopRecordAndExit'), rt('cancel')],
       defaultId: 0,
       cancelId: 1,
       noLink: true

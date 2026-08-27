@@ -1,9 +1,21 @@
 import { app } from 'electron'
 import { join, dirname } from 'path'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
-import { DEFAULT_LOCALE } from '../src/constants/locales'
+import { DEFAULT_LOCALE, normalizeLocale, type SupportedLocale } from '../src/constants/locales'
 import { sanitizeSettings } from '../src/utils/validators'
 import { registerProtectedPath } from './path-safety'
+import { translateRuntimeMessage } from '../src/i18n'
+
+function runtimeLocale(): SupportedLocale {
+  const locale = String(app.getLocale?.() || DEFAULT_LOCALE).toLowerCase()
+  if (locale.startsWith('zh')) return 'zh'
+  if (locale.startsWith('en')) return 'en'
+  return normalizeLocale(locale, DEFAULT_LOCALE)
+}
+
+function rt(key: Parameters<typeof translateRuntimeMessage>[1], params?: Record<string, string>): string {
+  return translateRuntimeMessage(runtimeLocale(), key, params)
+}
 
 function resolveAppStorageRoot(): string {
   const packagedRoot = app.isPackaged ? dirname(process.execPath) : ''
@@ -49,7 +61,7 @@ function resolveAppStorageRoot(): string {
   try {
     const userDataDir = app.getPath('userData')
     mkdirSync(userDataDir, { recursive: true })
-    console.warn(`[m3u8-helper] 安装目录不可写，配置已降级存储到用户数据目录: ${userDataDir}`)
+    console.warn(rt('storageFallbackToUserData', { path: userDataDir }))
     return userDataDir
   } catch {
     return packagedRoot || app.getAppPath()

@@ -18,8 +18,3 @@ export function normalizeLocale(value: unknown, fallback: SupportedLocale = DEFA
 
   return fallback
 }
-
-export const LOCALE_LABELS: Record<SupportedLocale, string> = {
-  zh: '中文',
-  en: 'English'
-} as const

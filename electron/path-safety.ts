@@ -18,6 +18,14 @@ export interface PathSafetyResult {
   reason?: string
 }
 
+export const PATH_SAFETY_REASON = {
+  notAbsolute: 'path.notAbsolute',
+  rootDenied: 'path.rootDenied',
+  shallowDepthDenied: 'path.shallowDepthDenied',
+  criticalDirDenied: 'path.criticalDirDenied',
+  protectedDirDenied: 'path.protectedDirDenied'
+} as const
+
 /** 系统关键目录：自身及任何子路径都不允许作为递归删除目标 */
 const criticalExtra = new Set<string>()
 
@@ -131,31 +139,31 @@ export function registerProtectedPath(raw: string): void {
 export function isAllowedRecursiveDeleteTarget(raw: unknown): PathSafetyResult {
   const normalized = normalizeAbsolute(raw)
   if (!normalized) {
-    return { ok: false, reason: '不是有效的绝对路径' }
+    return { ok: false, reason: PATH_SAFETY_REASON.notAbsolute }
   }
 
   const targetLower = toLower(normalized)
   const rootLower = toLower(parse(normalized).root)
 
   if (targetLower === rootLower) {
-    return { ok: false, path: normalized, reason: '不允许删除盘根目录' }
+    return { ok: false, path: normalized, reason: PATH_SAFETY_REASON.rootDenied }
   }
 
   const relFromRoot = relative(parse(normalized).root, normalized)
   const depth = relFromRoot.split(sep).filter(Boolean).length
   if (depth < 2) {
-    return { ok: false, path: normalized, reason: '路径深度不足，拒绝整目录删除' }
+    return { ok: false, path: normalized, reason: PATH_SAFETY_REASON.shallowDepthDenied }
   }
 
   for (const critical of getCriticalPaths()) {
     if (isWithinOrEqual(targetLower, critical)) {
-      return { ok: false, path: normalized, reason: '位于系统关键目录内' }
+      return { ok: false, path: normalized, reason: PATH_SAFETY_REASON.criticalDirDenied }
     }
   }
 
   for (const protectedPath of getUserProtectedPaths()) {
     if (isWithinOrEqual(protectedPath, targetLower)) {
-      return { ok: false, path: normalized, reason: '目标是受保护目录或其上级目录' }
+      return { ok: false, path: normalized, reason: PATH_SAFETY_REASON.protectedDirDenied }
     }
   }
 

@@ -42,8 +42,8 @@ export function validateSettingValue(key: string, value: unknown): { valid: bool
     case 'tmpDir':
     case 'logFilePath':
     case 'keyTextFile': {
-      if (typeof normalized !== 'string') return { valid: false, value: '', message: '字段必须为字符串' }
-      return { valid: normalized.trim() === '' || isValidPathLike(normalized.trim()), value: normalized.trim(), message: normalized.trim() && !isValidPathLike(normalized.trim()) ? '路径格式不合法' : undefined }
+      if (typeof normalized !== 'string') return { valid: false, value: '', message: 'validation.stringRequired' }
+      return { valid: normalized.trim() === '' || isValidPathLike(normalized.trim()), value: normalized.trim(), message: normalized.trim() && !isValidPathLike(normalized.trim()) ? 'validation.invalidPathFormat' : undefined }
     }
 
     case 'language': {
@@ -51,7 +51,7 @@ export function validateSettingValue(key: string, value: unknown): { valid: bool
       return {
         valid: SUPPORTED_LOCALES.includes(text as (typeof SUPPORTED_LOCALES)[number]),
         value: text as (typeof SUPPORTED_LOCALES)[number],
-        message: `语言必须为 ${SUPPORTED_LOCALES.join(' 或 ')}`
+        message: 'validation.unsupportedLanguage'
       }
     }
 
@@ -60,14 +60,14 @@ export function validateSettingValue(key: string, value: unknown): { valid: bool
 
     case 'baseUrl':
     case 'proxy': {
-      if (typeof normalized !== 'string') return { valid: false, value: '', message: '字段必须为字符串' }
+      if (typeof normalized !== 'string') return { valid: false, value: '', message: 'validation.stringRequired' }
       if (normalized.trim() === '') return { valid: true, value: '' }
-      return { valid: isValidHttpUrl(normalized.trim()), value: normalized.trim(), message: '必须为合法的 URL' }
+      return { valid: isValidHttpUrl(normalized.trim()), value: normalized.trim(), message: 'validation.invalidUrl' }
     }
 
     case 'headers': {
       if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
-        return { valid: false, value: {}, message: '请求头必须为对象' }
+        return { valid: false, value: {}, message: 'validation.headersObjectRequired' }
       }
       return { valid: true, value: Object.fromEntries(Object.entries(normalized as Record<string, unknown>).map(([k, v]) => [k, String(v)])) }
     }
@@ -85,10 +85,10 @@ export function validateSettingValue(key: string, value: unknown): { valid: bool
       return { valid: true, value: validateQueueNumber(normalized, 10, 600, 100) }
 
     case 'maxSpeed': {
-      if (typeof normalized !== 'string') return { valid: false, value: '', message: '限速值必须为字符串' }
+      if (typeof normalized !== 'string') return { valid: false, value: '', message: 'validation.speedStringRequired' }
       if (normalized.trim() === '') return { valid: true, value: '' }
       const isValidPattern = /^\d+(?:\.\d+)?[KMG]?$/i.test(normalized.trim()) || /^\d+(?:\.\d+)?[KMG]B?\/?s?$/i.test(normalized.trim())
-      return { valid: isValidPattern, value: normalized.trim(), message: '限速格式应为 10M、500K 或 1.5G' }
+      return { valid: isValidPattern, value: normalized.trim(), message: 'validation.invalidSpeedFormat' }
     }
 
     case 'autoSelect':
@@ -138,29 +138,29 @@ export function validateSettingValue(key: string, value: unknown): { valid: bool
     }
 
     case 'customHlsMethod': {
-      if (typeof normalized !== 'string') return { valid: false, value: '', message: '加密方法必须为字符串' }
+      if (typeof normalized !== 'string') return { valid: false, value: '', message: 'validation.hlsMethodStringRequired' }
       const allowed = ['', 'AES_128', 'AES_128_ECB', 'CENC', 'CHACHA20', 'NONE', 'SAMPLE_AES', 'SAMPLE_AES_CTR']
-      return { valid: allowed.includes(normalized.trim()) || normalized.trim() === '', value: normalized.trim(), message: normalized.trim() && !allowed.includes(normalized.trim()) ? '非法的 HLS 加密方法' : undefined }
+      return { valid: allowed.includes(normalized.trim()) || normalized.trim() === '', value: normalized.trim(), message: normalized.trim() && !allowed.includes(normalized.trim()) ? 'validation.invalidHlsMethod' : undefined }
     }
 
     case 'customHlsKey':
     case 'customHlsIv': {
-      if (typeof normalized !== 'string') return { valid: false, value: '', message: '必须为字符串' }
+      if (typeof normalized !== 'string') return { valid: false, value: '', message: 'validation.mustBeString' }
       return { valid: true, value: normalized.trim().slice(0, 4096) }
     }
 
     case 'customRange': {
-      if (typeof normalized !== 'string') return { valid: false, value: '', message: '参数必须为字符串' }
+      if (typeof normalized !== 'string') return { valid: false, value: '', message: 'validation.parameterMustBeString' }
       if (normalized.trim() === '') return { valid: true, value: '' }
       return {
         valid: /^(\d+(?:\.\d+)?(?:-\d+(?:\.\d+)?)?|\d{1,2}:\d{2}:\d{2}-\d{1,2}:\d{2}:\d{2})$/.test(normalized.trim()),
         value: normalized.trim(),
-        message: '自定义范围格式应为 0-100 或 01:00:00-02:00:00'
+        message: 'validation.invalidCustomRangeFormat'
       }
     }
 
     case 'adKeywords':
-      if (!Array.isArray(normalized)) return { valid: false, value: [], message: '广告关键词必须为字符串数组' }
+      if (!Array.isArray(normalized)) return { valid: false, value: [], message: 'validation.adKeywordsStringArray' }
       return { valid: true, value: normalized.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean) }
 
     case 'customArgs':
@@ -168,7 +168,7 @@ export function validateSettingValue(key: string, value: unknown): { valid: bool
 
     default:
       // 未知配置项一律拒绝：防止任意 key 写入 settings.json
-      return { valid: false, value: undefined, message: '未知配置项' }
+      return { valid: false, value: undefined, message: 'validation.unknownSettingKey' }
   }
 }
 
@@ -181,7 +181,7 @@ export function validateSettings<T extends Record<string, unknown>>(settings: T)
   for (const [key, value] of Object.entries(settings)) {
     const result = validateSettingValue(key, value)
     if (!result.valid) {
-      errors.push(`${key}: ${result.message ?? '非法值'}`)
+      errors.push(`${key}: ${result.message ?? 'validation.invalidValue'}`)
       continue
     }
     ;(next as Record<string, unknown>)[key] = result.value
