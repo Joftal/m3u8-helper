@@ -7,14 +7,22 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag, e.g. v1.0.1'
+        description: '发布标签 / Release tag（例如 / e.g. v1.0.1）'
         required: true
       draft:
-        description: 'Create as draft release'
+        description: '仅草稿发布 / Draft release：true=创建草稿（不公开，便于先检查）；false=正式发布'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
         required: false
         default: 'false'
       prerelease:
-        description: 'Mark as prerelease'
+        description: '预发布 / Prerelease：true=标记为预发布（测试版）；false=标记为正式稳定版'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
         required: false
         default: 'false'
 
