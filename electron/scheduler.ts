@@ -17,6 +17,7 @@ interface ScheduledTask {
 }
 
 const activeTimers = new Map<string, ScheduledTask>()
+const scheduledTasks: Array<Omit<ScheduledTask, 'timer'>> = []
 
 function currentLocale(): SupportedLocale {
   try {
@@ -82,7 +83,6 @@ function scheduleCronTask(task: Pick<ScheduledTask, 'cron' | 'enabled' | 'url' |
 }
 
 export function addScheduledTask(taskData: any, mainWindow?: BrowserWindow | null): any {
-  const store = getStore()
   const validated = assertValidScheduledInput(taskData)
   const id = typeof taskData.id === 'string' && taskData.id.trim() && taskData.id.length <= 64
     ? taskData.id.trim()
@@ -95,11 +95,9 @@ export function addScheduledTask(taskData: any, mainWindow?: BrowserWindow | nul
     options: validated.options
   }
 
-  const tasks = store.get('scheduledTasks') || []
-  const index = tasks.findIndex((t: any) => t.id === id)
-  if (index >= 0) tasks.splice(index, 1)
-  tasks.push(task)
-  store.set('scheduledTasks', tasks)
+  const index = scheduledTasks.findIndex((t) => t.id === id)
+  if (index >= 0) scheduledTasks.splice(index, 1)
+  scheduledTasks.push(task)
 
   const existing = activeTimers.get(id)
   if (existing?.timer) {
@@ -114,30 +112,20 @@ export function addScheduledTask(taskData: any, mainWindow?: BrowserWindow | nul
 }
 
 /**
- * 应用启动时调用：从持久化数据恢复所有启用中的定时任务。
- * cron 表达式无效或已禁用的任务保留数据但跳过调度。
+ * 应用启动时调用：当前版本不再持久化定时任务，启动不做恢复。
  */
 export function initScheduler(mainWindow?: BrowserWindow | null): void {
-  const store = getStore()
-  const tasks = Array.isArray(store.get('scheduledTasks')) ? store.get('scheduledTasks') : []
-
-  for (const persisted of tasks) {
-    if (!persisted?.id) continue
-
-    const timer = scheduleCronTask(persisted, mainWindow)
-    if (timer) {
-      activeTimers.set(persisted.id, { ...persisted, timer })
-    } else {
-      console.warn(rt('schedulerTaskSkipped', { id: String(persisted.id) }))
-    }
+  for (const task of scheduledTasks) {
+    if (!task?.id) continue
+    const timer = scheduleCronTask(task, mainWindow)
+    if (timer) activeTimers.set(task.id, { ...task, timer })
+    else console.warn(rt('schedulerTaskSkipped', { id: String(task.id) }))
   }
 }
 
 export function removeScheduledTask(id: string): boolean {
-  const store = getStore()
-  const tasks = store.get('scheduledTasks') || []
-  const filtered = tasks.filter((t: any) => t.id !== id)
-  store.set('scheduledTasks', filtered)
+  const index = scheduledTasks.findIndex((task) => task.id === id)
+  if (index >= 0) scheduledTasks.splice(index, 1)
 
   const timer = activeTimers.get(id)
   if (timer?.timer) {
@@ -149,6 +137,5 @@ export function removeScheduledTask(id: string): boolean {
 }
 
 export function getScheduledTasks(): any[] {
-  const store = getStore()
-  return store.get('scheduledTasks') || []
+  return [...scheduledTasks]
 }

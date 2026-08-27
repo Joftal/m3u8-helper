@@ -60,7 +60,7 @@ export function setActiveMainWindow(window: BrowserWindow | null): void {
 const PERSIST_INTERVAL_MS = 1000
 /** download:progress 事件最小发送间隔（最新值胜出），避免逐行日志触发渲染端重绘风暴 */
 const PROGRESS_SEND_INTERVAL_MS = 200
-/** 主进程单任务内存日志上限：与时长/日志量脱钩，持久化快照仍取最后 200 条 */
+/** 主进程单任务内存日志上限：与时长/日志量脱钩，持久化快照不落盘日志正文 */
 const MAX_TASK_LOG_LINES = 500
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null
@@ -684,6 +684,19 @@ async function getTaskAttributableBytes(task: DownloadTask & Record<string, any>
   return total
 }
 
+function sanitizeOptionsForRuntimePersistence(raw: unknown): Record<string, unknown> {
+  if (!raw || typeof raw !== 'object') return {}
+  const input = raw as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+
+  // 恢复识别录制任务只需要该标记；避免 headers/proxy/customArgs 等敏感信息落盘
+  if (input.kind === 'record' || input.kind === 'download') {
+    out.kind = input.kind
+  }
+
+  return out
+}
+
 function buildRuntimeSnapshot() {
   return Array.from(activeTasks.values()).map((task) => ({
     id: task.id,
@@ -699,10 +712,12 @@ function buildRuntimeSnapshot() {
     currentFrameRate: task.currentFrameRate,
     latestLog: task.latestLog,
     startTime: task.startTime instanceof Date ? task.startTime.toISOString() : task.startTime,
-    logs: task.logs.slice(-200),
     saveName: (task as any).saveName ?? '',
     saveDir: (task as any).saveDir ?? '',
-    options: (task as any).options ?? {}
+    tmpDir: (task as any).tmpDir ?? '',
+    outputPath: (task as any).outputPath ?? '',
+    // 仅持久化恢复链路必需字段，避免敏感配置写入本地 JSON
+    options: sanitizeOptionsForRuntimePersistence((task as any).options)
   }))
 }
 
@@ -774,7 +789,7 @@ export function interruptOrphanedRuntimeTasks(): void {
     changed = true
 
     // 崩溃时 finalizeTask 未执行，隔离临时目录未被清理；校验命名归属后收集待删
-    const orphanTmpDir: string = task?.options?.tmpDir || ''
+    const orphanTmpDir: string = task?.tmpDir || task?.options?.tmpDir || ''
     if (orphanTmpDir && basename(orphanTmpDir) === `task-${task.id}`) {
       staleTmpDirs.push(orphanTmpDir)
     }

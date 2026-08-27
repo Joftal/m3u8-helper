@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import { join, dirname } from 'path'
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'fs'
 import { DEFAULT_LOCALE, normalizeLocale, type SupportedLocale } from '../src/constants/locales'
 import { sanitizeSettings } from '../src/utils/validators'
 import { registerProtectedPath } from './path-safety'
@@ -126,7 +126,6 @@ const defaults = {
     customArgs: ''
   },
   history: [] as any[],
-  scheduledTasks: [] as any[],
   runtimeTasks: [] as any[],
   windowState: {
     width: 1280,
@@ -148,7 +147,6 @@ type CategoryName = keyof StoreSchema
 const categoryFiles: Record<CategoryName, string> = {
   settings: 'settings.json',
   history: 'history.json',
-  scheduledTasks: 'scheduled-tasks.json',
   runtimeTasks: 'runtime-tasks.json',
   windowState: 'window-state.json'
 }
@@ -248,9 +246,17 @@ export function initStore(): void {
   data = {
     settings: loadedSettings,
     history: readCategoryJson('history', JSON.parse(JSON.stringify(defaults.history))),
-    scheduledTasks: readCategoryJson('scheduledTasks', JSON.parse(JSON.stringify(defaults.scheduledTasks))),
     runtimeTasks: readCategoryJson('runtimeTasks', JSON.parse(JSON.stringify(defaults.runtimeTasks))),
     windowState: readCategoryJson('windowState', JSON.parse(JSON.stringify(defaults.windowState)))
+  }
+
+  const legacyScheduledTasksFile = join(appDataDir, 'scheduled-tasks.json')
+  if (existsSync(legacyScheduledTasksFile)) {
+    try {
+      rmSync(legacyScheduledTasksFile, { force: true })
+    } catch (error) {
+      console.warn(rt('deleteFailedWithReason', { reason: (error as Error).message }))
+    }
   }
 
   if (prunedLegacy) {

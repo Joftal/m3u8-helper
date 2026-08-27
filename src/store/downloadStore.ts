@@ -37,7 +37,12 @@ const normalizeRuntimeTask = (task: any): DownloadTask => ({
     level: entry.level || 'INFO',
     message: entry.message || String(entry)
   })) : [],
-  options: task.options || {}
+  options: {
+    ...(task.options || {}),
+    // 兼容收敛后的 runtime 快照：tmpDir/outputPath 提升为顶层后，恢复到 options 以复用既有清理链路
+    tmpDir: task.tmpDir || task.options?.tmpDir,
+    outputPath: task.outputPath || task.options?.outputPath
+  }
 })
 
 export const useDownloadStore = create<DownloadStore>((set, get) => ({

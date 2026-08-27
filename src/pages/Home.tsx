@@ -22,7 +22,6 @@ import { isImportHeaderAlias, useTranslation } from '@/i18n'
 import { extractFileName, extractUrlHost, formatDuration, formatFileSize, generateId } from '@/utils/format'
 import { isValidUrl } from '@/utils/validators'
 import { getTaskStatusMeta, STATUS_ICON_META } from '@/utils/status'
-import { formatNetworkSpeed } from '@/utils/speed'
 import { buildTaskOptions } from '@/utils/taskOptions'
 import {
   DEFAULT_LIVE_TAKE_COUNT,
@@ -924,12 +923,7 @@ export default function Home() {
     const isCancelling = cancellingIds.includes(task.id)
     const finishedDuration = getRecordDurationSeconds(task)
     const remaining = limitSeconds - (elapsed ?? 0)
-    // 平均速率 = 已捕获体积 / 时长，比实时速率更能反映整体采集效率；
     // 直播模式下 CLI 不输出可解析的逐分片进度，故不展示分片数
-    const durationSeconds = live ? elapsed ?? 0 : finishedDuration ?? 0
-    const avgSpeed = captured > 0 && durationSeconds > 0
-      ? formatNetworkSpeed(captured / durationSeconds)
-      : ''
     // 仅展示主机名：完整链接含授权参数，既占位又不宜裸露（悬停可见）
     const host = extractUrlHost(task.url)
 
@@ -976,8 +970,6 @@ export default function Home() {
 
         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-0.5 font-mono text-[11px] tabular-nums text-slate-500 dark:text-neutral-400">
           {captured > 0 && <span>{t('home.captured').replace('{size}', formatFileSize(captured))}</span>}
-          {live && task.speed && task.speed !== '0 KB/s' && <span>{t('home.liveSpeed').replace('{speed}', task.speed)}</span>}
-          {avgSpeed && <span>{t('home.avgSpeed').replace('{speed}', avgSpeed)}</span>}
           {!live && finishedDuration !== null && (
             <span title={t('home.wallClockHint')}>{t('home.wallClockDuration').replace('{time}', formatDuration(finishedDuration))}</span>
           )}
