@@ -38,7 +38,7 @@
     ],
     "icon": "resources/icon.ico",
     "sign": false,
-    "signAndEditExecutable": false
+    "signAndEditExecutable": true
   },
   "mac": {
     "target": [
