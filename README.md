@@ -92,6 +92,7 @@ npm run package:mac   # macOS
   - `tag` (required)
   - `draft` (`true` = draft release)
   - `prerelease` (`true` = prerelease)
+- The in-app version is automatically synced from the release tag (for example `v1.2.3` -> `1.2.3`)
 - Release notes are generated automatically from commits/PRs
 - Workflow file: `.github/workflows/build-and-release.yml`
 

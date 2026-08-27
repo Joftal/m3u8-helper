@@ -92,6 +92,7 @@ npm run package:mac   # macOS
   - `tag`（必填）
   - `draft`（`true` 表示仅草稿发布）
   - `prerelease`（`true` 表示预发布）
+- 应用内显示的版本号会自动同步为发布标签版本（例如 `v1.2.3` -> `1.2.3`）
 - Release Notes（版本更新说明）会基于提交/PR 自动生成
 - 工作流文件：`.github/workflows/build-and-release.yml`
 

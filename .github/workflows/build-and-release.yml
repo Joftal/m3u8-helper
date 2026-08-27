@@ -43,6 +43,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Sync app version from tag
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $rawTag = "${{ inputs.tag }}"
+          } else {
+            $rawTag = "${{ github.ref_name }}"
+          }
+          $version = $rawTag -replace '^v', ''
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Invalid release tag: $rawTag"
+          }
+          npm version $version --no-git-tag-version --allow-same-version
+
       - name: Type check
         run: npm run typecheck
 
