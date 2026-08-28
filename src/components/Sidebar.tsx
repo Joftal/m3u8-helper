@@ -121,7 +121,7 @@ export default function Sidebar() {
               }`
             }
           >
-            {({ isActive }) => (
+            {() => (
               <>
                 <span className="text-xl leading-none">{emoji}</span>
                 <span className="flex-1">{t(labelKey)}</span>

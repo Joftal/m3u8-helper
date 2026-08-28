@@ -108,8 +108,6 @@ export const messages = {
       refreshIntervalSeconds: '刷新间隔 (秒)',
       liveTakeCount: '单文件分片数',
       captured: '已捕获 {size}',
-      liveSpeed: '实时 {speed}',
-      avgSpeed: '平均 {speed}',
       wallClockDuration: '耗时 {time}',
       wallClockHint: '录制墙钟耗时；非直播源下载快于实时时，会小于视频文件时长',
       fixedMkvNotice: '录制固定使用 MKV 封装：即使程序异常中断，已录内容仍可正常播放。可同时发起多个录制任务。',
@@ -335,8 +333,7 @@ export const messages = {
       features: {
         download: 'HLS / DASH / MSS 下载',
         liveRecord: '直播实时录制',
-        batchTasks: '批量任务队列',
-        scheduledTasks: '定时计划任务'
+        batchTasks: '批量任务队列'
       },
       engineCredit: 'nilaoda 开发的命令行流媒体下载程序。本应用的下载、解密与录制能力均由其提供。',
       appInfo: '应用信息',
@@ -475,8 +472,6 @@ export const messages = {
       refreshIntervalSeconds: 'Refresh interval (seconds)',
       liveTakeCount: 'Segments per file',
       captured: 'Captured {size}',
-      liveSpeed: 'Live {speed}',
-      avgSpeed: 'Average {speed}',
       wallClockDuration: 'Duration {time}',
       wallClockHint: 'Recording wall-clock duration; non-live downloads can be faster than real time and may be shorter than the video file duration',
       fixedMkvNotice: 'Recording always uses MKV container: even if the program crashes unexpectedly, the recorded content remains playable. Multiple recording tasks can run at the same time.',
@@ -702,8 +697,7 @@ export const messages = {
       features: {
         download: 'HLS / DASH / MSS downloads',
         liveRecord: 'Live streaming recording',
-        batchTasks: 'Batch task queue',
-        scheduledTasks: 'Scheduled tasks'
+        batchTasks: 'Batch task queue'
       },
       engineCredit: 'Developed by nilaoda, this command-line media downloader powers the download, decryption, and recording features used by this app.',
       appInfo: 'Application info',

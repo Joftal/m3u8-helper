@@ -18,8 +18,7 @@ export default function About() {
   const features = [
     t('about.features.download'),
     t('about.features.liveRecord'),
-    t('about.features.batchTasks'),
-    t('about.features.scheduledTasks')
+    t('about.features.batchTasks')
   ]
 
   useEffect(() => {

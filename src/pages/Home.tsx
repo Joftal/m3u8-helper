@@ -240,9 +240,6 @@ export default function Home() {
   const downloadTasks = tasks.filter((task) => !isRecordTask(task))
   const recordTasks = tasks.filter((task) => isRecordTask(task))
   const visibleTasks = activeTab === 'download' ? downloadTasks : recordTasks
-  const emptyTaskType = activeTab === 'download' ? t('home.downloadTask') : t('home.recordTask')
-  const emptyStateText = t('home.noTasks').replace('{type}', emptyTaskType)
-  const emptyStateHint = t('home.noTasksHint').replace('{type}', emptyTaskType)
 
   // 录制计时 ticker：仅在录制 Tab 可见且存在活跃录制任务时运行，
   // 驱动基于 startTime 的已录时长刷新（下载 Tab 期间录制 UI 不可见，无需空转重渲染）
