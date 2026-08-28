@@ -1726,11 +1726,9 @@ function parseOutput(taskId: string, line: string, mainWindow: BrowserWindow | n
     }
   }
 
-  const speedMatch = clean.match(/(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB)ps/i)
-  if (speedMatch) {
-    const bytesPerSecond = parseSizeValue(`${speedMatch[1]} ${speedMatch[2]}`)
-    task.speed = formatBytesPerSecond(bytesPerSecond)
-  }
+  // 速度以 speedTimer 磁盘差分为唯一权威口径，不解析 CLI 速率行（网络口径 与
+  // 本地 IO 口径交替写 task.speed 会致 UI 抖动，Mbps 按字节表解析还差 8 倍）；
+  // 原始速率行仍完整展示在任务日志中，不丢失信息。
 
   const etaMatch = clean.match(/(?:ETA|剩余时间|预计剩余|剩余)\s*[:=]?\s*(\d{1,2}:\d{2}:\d{2}|\d{1,2}:\d{2})/i)
   if (etaMatch) {
