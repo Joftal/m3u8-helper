@@ -14,6 +14,7 @@
  * 取累计值最大的一行（= 字节统计，自开机累计必然最大）即可，与语言无关。
  */
 import { spawn } from 'child_process'
+import { BrowserWindow } from 'electron'
 
 export interface NetworkSample {
   /** 系统下行字节率 B/s */
@@ -29,11 +30,7 @@ let inFlight = false
 let prev: { rx: number; tx: number; at: number } | null = null
 
 function push(sample: NetworkSample): void {
-  BrowserWindowAll()[0]?.webContents.send('network:stats', sample)
-}
-
-function BrowserWindowAll(): import('electron').BrowserWindow[] {
-  return (require('electron') as typeof import('electron')).BrowserWindow.getAllWindows()
+  BrowserWindow.getAllWindows()[0]?.webContents.send('network:stats', sample)
 }
 
 /** Windows: 解析 netstat -e 输出，取「两个大整数」行中累计值最大的一组（= 字节数行） */

@@ -83,15 +83,10 @@ export function formatLiveLimitForCli(raw: string): string | undefined {
 }
 
 /**
- * 录制实际开始时间（毫秒）：优先取首条日志时间戳 —— CLI 从真正拉流才开始计时
- * 限额，首条日志比 IPC spawn 成功时刻更贴近该基准，可减小限额条的时间基准偏差。
+ * 录制实际开始时间（毫秒）：固定使用任务 startTime（IPC spawn 成功时刻）。
+ * 内存日志链路移除后，startTime 是全场景（含重启恢复）唯一一致的计时基准。
  */
-export function getRecordStartMs(task: Pick<DownloadTask, 'startTime' | 'logs'>): number {
-  const firstLogTs = task.logs?.[0]?.timestamp
-  if (firstLogTs) {
-    const parsed = Date.parse(firstLogTs)
-    if (!Number.isNaN(parsed)) return parsed
-  }
+export function getRecordStartMs(task: Pick<DownloadTask, 'startTime'>): number {
   const start = Date.parse(task.startTime)
   return Number.isNaN(start) ? Date.now() : start
 }

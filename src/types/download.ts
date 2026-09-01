@@ -15,7 +15,6 @@ export interface DownloadTask {
   latestLog?: string
   startTime: string
   endTime?: string
-  logs: LogEntry[]
   options: DownloadOptions
 }
 
@@ -128,12 +127,6 @@ export interface DownloadOptions {
 
   // 自定义参数（追加到末尾）
   customArgs?: string
-}
-
-export interface LogEntry {
-  timestamp: string
-  level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG'
-  message: string
 }
 
 export interface HistoryRecord {

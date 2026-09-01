@@ -20,14 +20,12 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web"
   },
   "dependencies": {
-    "node-cron": "^3.0.3",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.1",
     "@electron-toolkit/utils": "^4.0.0",
     "@types/node": "^22.10.0",
-    "@types/node-cron": "^3.0.11",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",

@@ -17,7 +17,6 @@ export interface ElectronAPI {
       error?: string
     }>
     onProgress: (callback: (data: any) => void) => () => void
-    onLog: (callback: (data: any) => void) => () => void
     onComplete: (callback: (data: any) => void) => () => void
     /** 录制任务 TS 中间产物自动转封装完成（outputs 为产出的 MKV 列表） */
     onRemuxDone: (callback: (data: { taskId: string; outputs: string[]; attempted: number }) => void) => () => void
@@ -37,11 +36,6 @@ export interface ElectronAPI {
   runtime: {
     getAll: () => Promise<any[]>
     remove: (taskId: string) => Promise<{ success: boolean }>
-  }
-  scheduler: {
-    add: (task: any) => Promise<any>
-    remove: (id: string) => Promise<boolean>
-    getAll: () => Promise<any[]>
   }
   dialog: {
     openDir: () => Promise<string | null>

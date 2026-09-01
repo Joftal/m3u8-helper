@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { join, dirname } from 'path'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'fs'
 import { DEFAULT_LOCALE, normalizeLocale, type SupportedLocale } from '../src/constants/locales'
+import { STATIC_DEFAULT_SETTINGS } from '../src/constants/defaultSettings'
 import { sanitizeSettings } from '../src/utils/validators'
 import { registerProtectedPath } from './path-safety'
 import { translateRuntimeMessage } from '../src/i18n'
@@ -77,53 +78,12 @@ const defaultLogFilePath = join(defaultLogDir, 'N_m3u8DL-RE.log')
 
 const defaults = {
   settings: {
-    language: DEFAULT_LOCALE,
-    exePath: '',
-    ffmpegPath: '',
-    mp4decryptPath: '',
+    // 静态字段与渲染端共享唯一来源（src/constants/defaultSettings.ts），
+    // 路径类字段由应用根目录派生，属于主进程权威值
+    ...STATIC_DEFAULT_SETTINGS,
     saveDir: defaultDownloadDir,
     tmpDir: defaultTmpDir,
-    savePattern: '',
-    logFilePath: defaultLogFilePath,
-    baseUrl: '',
-    proxy: '',
-    useSystemProxy: true,
-    headers: {} as Record<string, string>,
-    threadCount: 8,
-    downloadRetryCount: 3,
-    httpRequestTimeout: 100,
-    maxSpeed: '',
-    autoSelect: true,
-    subOnly: false,
-    batchConcurrency: 2,
-    binaryMerge: false,
-    checkSegmentsCount: true,
-    useFFmpegConcatDemuxer: false,
-    skipMerge: false,
-    muxAfterDone: true,
-    muxFormat: 'mp4',
-    muxMuxer: 'ffmpeg',
-    muxKeepFiles: false,
-    muxSkipSub: false,
-    delAfterDone: true,
-    noDateInfo: false,
-    logLevel: 'INFO',
-    noLog: false,
-    writeMetaJson: true,
-    appendUrlParams: false,
-    concurrentDownload: false,
-    subFormat: 'SRT',
-    autoSubtitleFix: true,
-    decryptionEngine: 'MP4DECRYPT',
-    mp4RealTimeDecryption: false,
-    keyTextFile: '',
-    customHlsMethod: '',
-    customHlsKey: '',
-    customHlsIv: '',
-    customRange: '',
-    adKeywords: [] as string[],
-    allowHlsMultiExtMap: false,
-    customArgs: ''
+    logFilePath: defaultLogFilePath
   },
   history: [] as any[],
   runtimeTasks: [] as any[],

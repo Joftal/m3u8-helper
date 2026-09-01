@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { DownloadTask, LogEntry } from '@/types/download'
+import type { DownloadTask } from '@/types/download'
 
 interface DownloadStore {
   tasks: DownloadTask[]
@@ -10,7 +10,6 @@ interface DownloadStore {
   updateTask: (id: string, updates: Partial<DownloadTask>) => void
   removeTask: (id: string) => void
   setActiveTask: (id: string | null) => void
-  addLog: (taskId: string, log: LogEntry) => void
   getTask: (id: string) => DownloadTask | undefined
   loadRuntimeTasks: () => Promise<void>
 }
@@ -29,14 +28,9 @@ const normalizeRuntimeTask = (task: any): DownloadTask => ({
   totalBytes: Number(task.totalBytes) || 0,
   etaSeconds: Number(task.etaSeconds) || 0,
   currentFrameRate: Number(task.currentFrameRate) || 0,
-  latestLog: task.latestLog || task.logs?.[task.logs.length - 1]?.message || '',
+  latestLog: task.latestLog || '',
   startTime: task.startTime || new Date().toISOString(),
   endTime: task.endTime,
-  logs: Array.isArray(task.logs) ? task.logs.map((entry: any) => ({
-    timestamp: entry.timestamp || new Date().toISOString(),
-    level: entry.level || 'INFO',
-    message: entry.message || String(entry)
-  })) : [],
   options: {
     ...(task.options || {}),
     // 兼容收敛后的 runtime 快照：tmpDir/outputPath 提升为顶层后，恢复到 options 以复用既有清理链路
@@ -65,16 +59,6 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
   })),
 
   setActiveTask: (id) => set({ activeTaskId: id }),
-
-  addLog: (taskId, log) => set((state) => ({
-    tasks: state.tasks.map((t) => {
-      if (t.id !== taskId) return t
-      const logs = [...t.logs, log]
-      // 保留最近 1000 条日志
-      if (logs.length > 1000) logs.splice(0, logs.length - 1000)
-      return { ...t, logs }
-    })
-  })),
 
   getTask: (id) => get().tasks.find((t) => t.id === id),
 

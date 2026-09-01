@@ -4,7 +4,6 @@ import { is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from '../ipc-handlers'
 import { getStore, initStore } from '../store'
 import { interruptOrphanedRuntimeTasks, countActiveRecordTasks, cancelAllRecordTasks, sweepOrphanedEmptyTmpDirs, setActiveMainWindow } from '../downloader'
-import { initScheduler } from '../scheduler'
 import { startNetworkMonitor, stopNetworkMonitor } from '../network-monitor'
 import { DEFAULT_LOCALE, normalizeLocale, type SupportedLocale } from '../../src/constants/locales'
 import { translateRuntimeMessage } from '../../src/i18n'
@@ -204,7 +203,6 @@ if (!app.requestSingleInstanceLock()) {
     // 启动恢复触发的后台动作（转封装等）需要窗口引用才能反馈到渲染端
     setActiveMainWindow(mainWindow)
     registerIpcHandlers(mainWindow)
-    initScheduler(mainWindow)
     startNetworkMonitor()
 
     app.on('activate', () => {

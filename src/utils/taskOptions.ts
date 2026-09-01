@@ -69,7 +69,6 @@ export function createTaskRecord(params: CreateTaskParams): DownloadTask {
     downloadedSegments: 0,
     totalSegments: 0,
     startTime: new Date().toISOString(),
-    logs: [],
     options: params.options
   }
 }

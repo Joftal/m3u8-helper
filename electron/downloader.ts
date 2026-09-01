@@ -1,11 +1,12 @@
 import { ChildProcess, spawn } from 'child_process'
-import { accessSync, chmodSync, constants as fsConstants, existsSync, mkdirSync, readdirSync, rmSync, promises as fsPromises } from 'fs'
+import { accessSync, chmodSync, constants as fsConstants, existsSync, mkdirSync, readdirSync, rmSync, statSync, promises as fsPromises } from 'fs'
 import { BrowserWindow, nativeImage, Notification } from 'electron'
 import { basename, dirname, join } from 'path'
 import { getStore } from './store'
 import { isAllowedRecursiveDeleteTarget } from './path-safety'
 import { randomUUID } from 'crypto'
 import { isRecordTaskOptions } from '../src/utils/recording'
+import { formatNetworkSpeed } from '../src/utils/speed'
 import type { DownloadOptions } from '../src/types/download'
 import type { AppSettings } from '../src/types/settings'
 import { DEFAULT_LOCALE, normalizeLocale, type SupportedLocale } from '../src/constants/locales'
@@ -26,7 +27,6 @@ export interface DownloadTask {
   currentFrameRate: number
   latestLog: string
   startTime: Date
-  logs: string[]
 }
 
 const activeTasks = new Map<string, DownloadTask>()
@@ -60,8 +60,6 @@ export function setActiveMainWindow(window: BrowserWindow | null): void {
 const PERSIST_INTERVAL_MS = 1000
 /** download:progress 事件最小发送间隔（最新值胜出），避免逐行日志触发渲染端重绘风暴 */
 const PROGRESS_SEND_INTERVAL_MS = 200
-/** 主进程单任务内存日志上限：与时长/日志量脱钩，持久化快照不落盘日志正文 */
-const MAX_TASK_LOG_LINES = 500
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -180,13 +178,6 @@ function sanitizeCliWhitespace(text: string): string {
 
 /** CLI 日志行自带时间戳与级别前缀（如 "08:32:22.466 WARN : "） */
 const RE_CLI_LOG_PREFIX = /^\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+(DEBUG|INFO|WARN|ERROR)\s*[:：]\s*/
-
-function appendTaskLog(task: DownloadTask & Record<string, any>, line: string): void {
-  task.logs.push(line)
-  if (task.logs.length > MAX_TASK_LOG_LINES) {
-    task.logs.splice(0, task.logs.length - MAX_TASK_LOG_LINES)
-  }
-}
 
 function splitCustomArgs(raw: string): string[] {
   if (!raw) return []
@@ -361,7 +352,8 @@ function terminateProcessTree(pid: number): void {
     process.kill(pid, 'SIGTERM')
   } catch {}
 
-  setTimeout(() => {
+  // unref：兜底定时器不应阻止进程退出（应用退出场景下 1.5s 的等待没有意义）
+  const killFallback = setTimeout(() => {
     try {
       process.kill(-pid, 'SIGKILL')
     } catch {}
@@ -369,6 +361,7 @@ function terminateProcessTree(pid: number): void {
       process.kill(pid, 'SIGKILL')
     } catch {}
   }, 1500)
+  killFallback.unref()
 }
 
 export interface RemuxOutcome {
@@ -424,10 +417,28 @@ async function remuxTsArtifacts(
         ['-y', '-fflags', '+genpts', '-i', ts, '-map', '0', '-c', 'copy', target],
         { windowsHide: true, stdio: 'ignore' }
       )
-      child.on('close', (code) => resolve(code === 0))
-      child.on('error', () => resolve(false))
+      // 挂起保护：ffmpeg 卡死时强杀并收场，防止 Promise 永不 settle
+      // 导致 activeRemuxJobs 条目残留（同名任务会被持续强制改名）
+      let settled = false
+      const settle = (value: boolean) => {
+        if (settled) return
+        settled = true
+        clearTimeout(hangGuard)
+        resolve(value)
+      }
+      const hangGuard = setTimeout(() => {
+        try {
+          child.kill('SIGKILL')
+        } catch {}
+        settle(false)
+      }, REMUX_TIMEOUT_MS)
+      hangGuard.unref?.()
+      child.on('close', (code) => settle(code === 0))
+      child.on('error', () => settle(false))
     })
-    if (ok) {
+    // 退出码 0 不代表产物完整（磁盘写满、网络盘中断都可能产出截断文件）：
+    // 删源前校验目标存在且非空，不满足则保留源 TS 等待人工处理
+    if (ok && isNonEmptyFile(target)) {
       try {
         rmSync(ts, { force: true })
       } catch {}
@@ -435,6 +446,18 @@ async function remuxTsArtifacts(
     }
   }
   return outcome
+}
+
+/** 单文件转封装超时：-c copy 为秒级操作，5 分钟未完成即视为挂起 */
+const REMUX_TIMEOUT_MS = 5 * 60 * 1000
+
+/** 校验产物文件存在且非空（转封装删源前的最低完整性门槛） */
+function isNonEmptyFile(target: string): boolean {
+  try {
+    return existsSync(target) && statSync(target).size > 0
+  } catch {
+    return false
+  }
 }
 
 /** 转封装完成后向渲染端发事件（toast 反馈）；窗口不可用时静默完成 */
@@ -592,22 +615,6 @@ function finalizeTask(taskId: string, exitCode: number | null): void {
   task.process = null
   activeTasks.delete(taskId)
   flushRuntimeTasks()
-}
-
-function formatBytesPerSecond(bytesPerSecond: number): string {
-  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 KB/s'
-
-  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
-  let value = bytesPerSecond
-  let unitIndex = 0
-
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024
-    unitIndex += 1
-  }
-
-  const precision = value >= 10 ? 1 : 2
-  return `${value.toFixed(precision)} ${units[unitIndex]}`
 }
 
 /** 异步递归统计目录体积：磁盘扫描在 libuv 线程池执行，不阻塞主进程事件循环 */
@@ -861,7 +868,9 @@ export function sweepOrphanedEmptyTmpDirs(): void {
       const full = join(verdict.path, entry.name)
       try {
         if (readdirSync(full).length > 0) continue
-        rmSync(full, { force: true })
+        // 统一走 removeGuarded 入口（path-safety 校验 + deleted/skipped 记录），
+        // 删除操作保持单一审计面
+        removeGuarded(full, [], [])
       } catch {
         // 单个目录清扫失败不影响其余条目
       }
@@ -881,7 +890,7 @@ export function startDownload(options: DownloadOptions, mainWindow: BrowserWindo
   if (!requestUrl) {
     throw new Error(rt('downloadUrlRequired'))
   }
-  // 仅接受 http(s)：与 scheduler / 历史记录净化保持同一标准，阻断 file:、ftp: 等协议流入 CLI 参数
+  // 仅接受 http(s)：与历史记录净化保持同一标准，阻断 file:、ftp: 等协议流入 CLI 参数
   if (!/^https?:\/\//i.test(requestUrl)) {
     throw new Error(rt('downloadUrlMustBeHttp'))
   }
@@ -969,7 +978,6 @@ export function startDownload(options: DownloadOptions, mainWindow: BrowserWindo
     currentFrameRate: 0,
     latestLog: '',
     startTime: new Date(),
-    logs: [],
     options: options
   }
 
@@ -986,6 +994,8 @@ export function startDownload(options: DownloadOptions, mainWindow: BrowserWindo
   task.process = child
   task.status = 'running'
 
+  // 测速轮询 2s 一次：递归 stat 全目录的开销与分片数成正比，1s 频率在长录制/大 VOD
+  // 场景（数千分片）会造成持续的系统调用压力；速率按实际时间差计算，降频不损精度
   const speedTimer = setInterval(async () => {
     const activeTask = activeTasks.get(taskId) as (DownloadTask & Record<string, any>) | undefined
     if (!activeTask || activeTask.status !== 'running') return
@@ -1003,7 +1013,7 @@ export function startDownload(options: DownloadOptions, mainWindow: BrowserWindo
       const deltaBytes = Math.max(currentBytes - ((latest as any)._lastSpeedBytes ?? currentBytes), 0)
       const bytesPerSecond = deltaBytes / elapsedSeconds
 
-      latest.speed = formatBytesPerSecond(bytesPerSecond)
+      latest.speed = formatNetworkSpeed(bytesPerSecond)
       latest.downloadedBytes = Math.max(latest.downloadedBytes, currentBytes)
       latest._lastSpeedBytes = currentBytes
       latest._lastSpeedAt = now
@@ -1014,7 +1024,7 @@ export function startDownload(options: DownloadOptions, mainWindow: BrowserWindo
       const ref = activeTasks.get(taskId) as (DownloadTask & Record<string, any>) | undefined
       if (ref) ref._measuring = false
     }
-  }, 1000)
+  }, 2000)
   ;(task as any)._speedTimer = speedTimer
 
   // 解析 stdout/stderr：按字节攒行 + 自适应字符集解码（GBK/UTF-8），
@@ -1054,14 +1064,6 @@ export function startDownload(options: DownloadOptions, mainWindow: BrowserWindo
       task.status = 'failed'
       task.latestLog = `[ERROR] ${err.message}`
     }
-    if (task) {
-      appendTaskLog(task, `[ERROR] ${err.message}`)
-    }
-    activeMainWindow?.webContents.send('download:log', {
-      taskId,
-      level: 'ERROR',
-      message: err.message
-    })
     // 进程未能启动时不会触发 close，这里直接统一收尾，避免 speedTimer 泄漏
     finalizeTask(taskId, null)
   })
@@ -1125,8 +1127,10 @@ export function cancelDownload(taskId: string): boolean {
   return true
 }
 
+// 仅列 CLI 明确产物后缀；不含裸 .json —— 那会误删用户同名的普通 JSON 文件，
+// CLI 产出的元数据是 <stem>.meta.json（--write-meta-json），已单独列出
 const ARTIFACT_SUFFIXES = [
-  '.part', '.tmp', '.download', '.m3u8', '.meta.json', '.json',
+  '.part', '.tmp', '.download', '.m3u8', '.meta.json',
   '.ts', '.mp4', '.mkv', '.mp3', '.aac'
 ]
 
@@ -1239,8 +1243,9 @@ export function deleteTaskArtifacts(taskId: string, taskInfo: any = {}): DeleteO
         exactCandidates.add(`${baseName}${suffix}`)
       }
       for (const fileName of exactCandidates) {
+        // fileName 来自上方白名单拼接（不含路径分隔符），join 结果必然落在 saveDir 内，
+        // 路径穿越防护由 sanitizeTaskInfo + path-safety 承担，此处无需重复判断
         const candidate = join(saveDir, fileName)
-        if (!candidate.startsWith(saveDir)) continue
         if (!existsSync(candidate)) continue
         try {
           rmSync(candidate, { force: true })
@@ -1672,21 +1677,16 @@ function parseOutput(taskId: string, line: string, mainWindow: BrowserWindow | n
   const prefixMatch = clean.match(RE_CLI_LOG_PREFIX)
   const normalized = prefixMatch ? `[${prefixMatch[1]}] ${clean.slice(prefixMatch[0].length)}` : clean
 
-  appendTaskLog(task, normalized)
+  // 内存日志链路已移除：日志正文由 CLI 经 --log-file-path 落盘，
+  // 主进程仅保留 latestLog 单行用于 UI 状态预览，不再逐行存储/转发
   task.latestLog = normalized
 
-  let level = 'INFO'
-  if (normalized.includes('[ERROR]') || /\bError\b/i.test(normalized)) level = 'ERROR'
-  else if (normalized.includes('[WARN]') || /\bWarn\b/i.test(normalized)) level = 'WARN'
-  else if (normalized.includes('[DEBUG]')) level = 'DEBUG'
-
-  mainWindow?.webContents.send('download:log', {
-    taskId,
-    level,
-    message: normalized
-  })
-
-  const segmentSummaryMatch = clean.match(/(?:^|\||\s)(\d+)\s+segments?\b/i)
+  // 总分片数：收紧为 CLI 的固定输出形态——流信息表格的管道单元格（"| 123 Segments"）
+  // 或带 total/共/总计 关键词的汇总行；裸「数字 + segments」不再采信，避免把
+  // 日志正文里的任意计数误当作总分片数
+  const segmentSummaryMatch =
+    clean.match(/\|\s*(\d+)\s+segments?\b/i) ||
+    clean.match(/(?:total|共|总计)\D{0,8}(\d+)\s*(?:个)?\s*(?:segments?|分片|片段)/i)
   if (segmentSummaryMatch) {
     task.totalSegments = Math.max(task.totalSegments, Number(segmentSummaryMatch[1]) || 0)
   }
@@ -1751,7 +1751,7 @@ function parseOutput(taskId: string, line: string, mainWindow: BrowserWindow | n
   }
 
   // 进度事件按最小间隔合并发送（最新值胜出），避免逐行日志触发渲染端重绘风暴；
-  // 终态由 download:complete 携带，speedTimer 每秒兜底一次
+  // 终态由 download:complete 携带，speedTimer 每 2s 兜底一次
   const now = Date.now()
   if (now - ((task as any)._lastProgressSentAt ?? 0) >= PROGRESS_SEND_INTERVAL_MS) {
     ;(task as any)._lastProgressSentAt = now

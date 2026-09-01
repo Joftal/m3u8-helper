@@ -25,11 +25,6 @@ const api = {
       ipcRenderer.on('download:progress', listener)
       return () => ipcRenderer.removeListener('download:progress', listener)
     },
-    onLog: (callback: (data: any) => void) => {
-      const listener = (_: unknown, data: any) => callback(data)
-      ipcRenderer.on('download:log', listener)
-      return () => ipcRenderer.removeListener('download:log', listener)
-    },
     onComplete: (callback: (data: any) => void) => {
       const listener = (_: unknown, data: any) => callback(data)
       ipcRenderer.on('download:complete', listener)
@@ -62,13 +57,6 @@ const api = {
   runtime: {
     getAll: () => ipcRenderer.invoke('runtime:getAll'),
     remove: (taskId: string) => ipcRenderer.invoke('runtime:remove', taskId)
-  },
-
-  // 定时任务
-  scheduler: {
-    add: (task: any) => ipcRenderer.invoke('scheduler:add', task),
-    remove: (id: string) => ipcRenderer.invoke('scheduler:remove', id),
-    getAll: () => ipcRenderer.invoke('scheduler:getAll')
   },
 
   // 对话框

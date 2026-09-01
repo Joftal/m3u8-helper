@@ -801,9 +801,6 @@ export const runtimeMessages = {
     invalidParameterValue: '参数值非法',
     invalidHistoryRecord: '历史记录字段非法',
     unsupportedPath: '不支持的路径',
-    schedulerInputMustBeObject: '定时任务参数必须是对象',
-    schedulerUrlMustBeHttp: '定时任务 URL 必须是 http(s) 链接',
-    schedulerTaskSkipped: '[m3u8-helper] 定时任务 {id} 未调度：cron 表达式无效或任务已禁用',
     storageFallbackToUserData: '[m3u8-helper] 安装目录不可写，配置已降级存储到用户数据目录: {path}'
   },
   en: {
@@ -839,9 +836,6 @@ export const runtimeMessages = {
     invalidParameterValue: 'Invalid parameter value',
     invalidHistoryRecord: 'Invalid history record fields',
     unsupportedPath: 'Unsupported path',
-    schedulerInputMustBeObject: 'Scheduled task payload must be an object',
-    schedulerUrlMustBeHttp: 'Scheduled task URL must be an http(s) link',
-    schedulerTaskSkipped: '[m3u8-helper] Scheduled task {id} not registered: cron expression is invalid or task is disabled',
     storageFallbackToUserData: '[m3u8-helper] Installation directory is not writable. Falling back to user data directory: {path}'
   }
 } as const

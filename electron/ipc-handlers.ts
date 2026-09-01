@@ -1,7 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { getDefaultSettings, getStore, resetSettings } from './store'
 import { startDownload, cancelDownload, deleteTaskArtifacts, sanitizeTaskInfo } from './downloader'
-import { addScheduledTask, removeScheduledTask, getScheduledTasks } from './scheduler'
 import { validateSettingValue } from '../src/utils/validators'
 import type { HistoryRecord, DownloadOptions } from '../src/types/download'
 import { DEFAULT_LOCALE, normalizeLocale, type SupportedLocale } from '../src/constants/locales'
@@ -168,19 +167,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow | null): void {
     const tasks = Array.isArray(store.get('runtimeTasks')) ? store.get('runtimeTasks') : []
     store.set('runtimeTasks', tasks.filter((task: any) => task.id !== taskId))
     return { success: true }
-  })
-
-  // ========== 定时任务 ==========
-  ipcMain.handle('scheduler:add', async (_, task) => {
-    return addScheduledTask(task, mainWindow)
-  })
-
-  ipcMain.handle('scheduler:remove', async (_, id) => {
-    return removeScheduledTask(id)
-  })
-
-  ipcMain.handle('scheduler:getAll', async () => {
-    return getScheduledTasks()
   })
 
   // ========== 对话框 ==========

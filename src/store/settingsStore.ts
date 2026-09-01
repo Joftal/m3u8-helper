@@ -1,56 +1,17 @@
 import { create } from 'zustand'
-import { DEFAULT_LOCALE } from '../constants/locales'
+import { STATIC_DEFAULT_SETTINGS } from '../constants/defaultSettings'
 import type { AppSettings } from '@/types/settings'
 import { validateSettingValue, validateSettings } from '@/utils/validators'
 
+/**
+ * 渲染端默认设置：静态字段来自共享的 STATIC_DEFAULT_SETTINGS（与主进程同源），
+ * 路径类字段以空串占位——loadSettings 后会被主进程 store 的权威值覆盖。
+ */
 export const defaultSettings: AppSettings = {
-  language: DEFAULT_LOCALE,
-  exePath: '',
-  ffmpegPath: '',
-  mp4decryptPath: '',
+  ...STATIC_DEFAULT_SETTINGS,
   saveDir: '',
   tmpDir: '',
-  savePattern: '',
-  logFilePath: '',
-  baseUrl: '',
-  proxy: '',
-  useSystemProxy: true,
-  headers: {},
-  threadCount: 8,
-  downloadRetryCount: 3,
-  httpRequestTimeout: 100,
-  maxSpeed: '',
-  autoSelect: true,
-  subOnly: false,
-  batchConcurrency: 2,
-  binaryMerge: false,
-  checkSegmentsCount: true,
-  useFFmpegConcatDemuxer: false,
-  skipMerge: false,
-  muxAfterDone: true,
-  muxFormat: 'mp4',
-  muxMuxer: 'ffmpeg',
-  muxKeepFiles: false,
-  muxSkipSub: false,
-  delAfterDone: true,
-  noDateInfo: false,
-  logLevel: 'INFO',
-  noLog: false,
-  writeMetaJson: true,
-  appendUrlParams: false,
-  concurrentDownload: false,
-  subFormat: 'SRT',
-  autoSubtitleFix: true,
-  decryptionEngine: 'MP4DECRYPT',
-  mp4RealTimeDecryption: false,
-  keyTextFile: '',
-  customHlsMethod: '',
-  customHlsKey: '',
-  customHlsIv: '',
-  customRange: '',
-  adKeywords: [],
-  allowHlsMultiExtMap: false,
-  customArgs: ''
+  logFilePath: ''
 }
 
 export const resetExcludedKeys = [
